@@ -78,6 +78,35 @@ export function normalizeBusinessHours(input: unknown): BusinessHours {
   return { ...emptyBusinessHours(), ...(typeof summary === 'string' ? { legacySummary: summary.slice(0, 500) } : {}) };
 }
 
+export type HoursFormDay = { open: boolean; start: string; end: string };
+export type HoursForm = { timezone: string; days: Record<Weekday, HoursFormDay> };
+
+/** Editable form state: explicit values only, no inferred hours. */
+export function hoursToForm(input: unknown): HoursForm {
+  const hours = normalizeBusinessHours(input);
+  const days = {} as Record<Weekday, HoursFormDay>;
+  for (const day of WEEKDAYS) {
+    const d = hours.days[day];
+    days[day] = { open: Boolean(d?.open), start: d?.start ?? '', end: d?.end ?? '' };
+  }
+  return { timezone: hours.timezone, days };
+}
+
+/** Validate and build the stored structure from form state; throws on bad input. */
+export function formToHours(form: HoursForm): BusinessHours {
+  const days = {} as Record<Weekday, DayHours>;
+  for (const day of WEEKDAYS) {
+    const d = form.days?.[day];
+    days[day] = d?.open
+      ? { open: true, start: (d.start ?? '').trim(), end: (d.end ?? '').trim() }
+      : { open: false };
+  }
+  const status = Object.values(days).some((d) => d.open) ? 'configured' : 'needs-configuration';
+  const parsed = businessHoursSchema.safeParse({ version: 1, timezone: form.timezone, status, days });
+  if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? 'Invalid business hours');
+  return parsed.data;
+}
+
 /** Value to store for a legacy row, or null when the row is already structured. */
 export function legacyHoursMigrationValue(raw: string | null | undefined): string | null {
   if (!raw || !raw.trim()) return JSON.stringify(emptyBusinessHours());

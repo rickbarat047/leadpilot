@@ -1,6 +1,8 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { api } from '@/components/api';
+import HoursEditor from '@/components/hours-editor';
+import { formToHours, hoursToForm, type HoursForm } from '@/lib/business-hours';
 
 const NOTIF_KEYS: [string, string, string][] = [
   ['emailOwnerAlerts', 'New lead & escalation alerts', 'Email the owner when a lead arrives or the AI pauses a reply for review.'],
@@ -15,6 +17,8 @@ export default function Settings() {
   const [health, setHealth] = useState<Record<string, unknown> | null>(null);
   const [notif, setNotif] = useState<Record<string, boolean>>({});
   const [reviewLink, setReviewLink] = useState('');
+  const [hoursForm, setHoursForm] = useState<HoursForm>(() => hoursToForm({}));
+  const [hoursMsg, setHoursMsg] = useState('');
   const [msg, setMsg] = useState('');
   const [notifMsg, setNotifMsg] = useState('');
   useEffect(() => {
@@ -27,6 +31,7 @@ export default function Settings() {
       for (const [k] of NOTIF_KEYS) initial[k] = s[k] !== false;
       setNotif(initial);
       setReviewLink(typeof s.reviewLink === 'string' ? s.reviewLink : '');
+      if (j.businessHours) setHoursForm(hoursToForm(j.businessHours));
     }).catch(() => undefined);
     fetch('/api/health').then((r) => r.json()).then(setHealth).catch(() => undefined);
   }, []);
@@ -34,6 +39,14 @@ export default function Settings() {
     e.preventDefault();
     try { await api('/api/business', { method: 'PUT', body: JSON.stringify(form) }); setMsg('Saved.'); }
     catch (e) { setMsg(e instanceof Error ? e.message : 'Failed'); }
+  }
+  async function saveHours() {
+    setHoursMsg('');
+    try {
+      const hours = formToHours(hoursForm);
+      await api('/api/business', { method: 'PUT', body: JSON.stringify({ hours }) });
+      setHoursMsg('Saved. Availability now follows these hours.');
+    } catch (e) { setHoursMsg(e instanceof Error ? e.message : 'Failed'); }
   }
   async function saveNotif() {
     setNotifMsg('');
@@ -61,6 +74,14 @@ export default function Settings() {
           <pre style={{ fontSize: 12.5, background: '#f4f1ec', padding: 12, borderRadius: 8, overflow: 'auto' }}>{JSON.stringify(health, null, 2) ?? '…'}</pre>
           <div className="micro">Cron: POST /api/cron/tick every 5 min (external) + daily Vercel fallback. Webhooks + runs visible in Automations.</div>
         </div>
+      </div>
+      <div className="card pad" style={{ marginTop: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ fontWeight: 800 }}>Opening hours &amp; availability</div>
+          {hoursMsg && <span className="micro">{hoursMsg}</span>}
+        </div>
+        <HoursEditor value={hoursForm} onChange={setHoursForm} />
+        <button className="btn btn-primary btn-sm" style={{ marginTop: 12 }} onClick={saveHours}>Save opening hours</button>
       </div>
       <div className="card pad" style={{ marginTop: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>

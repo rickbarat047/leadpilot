@@ -2,12 +2,15 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/components/api';
+import HoursEditor from '@/components/hours-editor';
+import { formToHours, hoursToForm, type HoursForm } from '@/lib/business-hours';
 
 const INDUSTRIES = ['salon', 'barber', 'beauty clinic', 'gym', 'home cleaning', 'repair', 'photographer', 'tutor', 'dentist', 'real estate', 'wedding/events', 'other'];
 
 export default function Onboarding() {
   const [step, setStep] = useState(1);
-  const [form, setForm] = useState<Record<string, string>>({ name: '', industry: 'salon', description: '', services: 'Signature Haircut — 899\nBalayage Colour — 4999', pricing: '', hours: 'Mon–Sat 10:00–20:00', location: '', phone: '', email: '', website: '', calendar: 'internal', tone: 'friendly-professional', followup: '15m/6h/24h', reviews: '48h after visit', assistant: 'Ava' });
+  const [form, setForm] = useState<Record<string, string>>({ name: '', industry: 'salon', description: '', services: 'Signature Haircut — 899\nBalayage Colour — 4999', pricing: '', location: '', phone: '', email: '', website: '', calendar: 'internal', tone: 'friendly-professional', followup: '15m/6h/24h', reviews: '48h after visit', assistant: 'Ava' });
+  const [hoursForm, setHoursForm] = useState<HoursForm>(() => hoursToForm({}));
   const [msg, setMsg] = useState('');
   const router = useRouter();
 
@@ -17,6 +20,7 @@ export default function Onboarding() {
   async function finish(testLead: boolean) {
     setMsg('');
     try {
+      const hours = formToHours(hoursForm);
       const services = form.services.split('\n').map((l) => {
         const [name, price] = l.split(/[—–-]/).map((x) => (x ?? '').trim());
         return { name: name || l.trim(), price: Number((price ?? '').replace(/[^0-9]/g, '')) || 0, duration: 45 };
@@ -26,7 +30,7 @@ export default function Onboarding() {
         body: JSON.stringify({
           name: form.name, industry: form.industry, description: form.description, location: form.location,
           phone: form.phone, email: form.email, website: form.website,
-          hours: { summary: form.hours },
+          hours,
           settings: { assistantName: form.assistant, tone: form.tone, reviewDelayH: 48, calendar: form.calendar, followup: form.followup, reviews: form.reviews, pricingNotes: form.pricing },
           services,
         }),
@@ -39,9 +43,19 @@ export default function Onboarding() {
     } catch (e) { setMsg(e instanceof Error ? e.message : 'Failed'); }
   }
 
+  function next() {
+    if (step === 6) {
+      try { formToHours(hoursForm); }
+      catch (e) { setMsg(e instanceof Error ? e.message : 'Invalid opening hours'); return; }
+    }
+    setMsg('');
+    setStep((s) => Math.min(14, s + 1));
+  }
+
   useEffect(() => {
     fetch('/api/business').then((r) => r.json()).then((j) => {
       if (j.business?.name) set('name', j.business.name);
+      if (j.businessHours) setHoursForm(hoursToForm(j.businessHours));
     }).catch(() => undefined);
   }, []);
 
@@ -51,7 +65,7 @@ export default function Onboarding() {
     3: (<><label className="lbl">What do you do? (2–3 lines)</label><textarea className="textarea" value={form.description} onChange={(e) => set('description', e.target.value)} placeholder="Boutique salon: cuts, colour, facials, bridal." /></>),
     4: (<><label className="lbl">Services (one per line: Name — Price₹)</label><textarea className="textarea" value={form.services} onChange={(e) => set('services', e.target.value)} /></>),
     5: (<><label className="lbl">Pricing notes (deposits, packages, what AI must never discount)</label><textarea className="textarea" value={form.pricing} onChange={(e) => set('pricing', e.target.value)} placeholder="Bridal needs 30% advance. Never discount below listed price." /></>),
-    6: (<><label className="lbl">Opening hours</label><input className="input" value={form.hours} onChange={(e) => set('hours', e.target.value)} /></>),
+    6: (<><label className="lbl">Opening hours</label><HoursEditor value={hoursForm} onChange={setHoursForm} /></>),
     7: (<><label className="lbl">Location</label><input className="input" value={form.location} onChange={(e) => set('location', e.target.value)} placeholder="Area, City" /></>),
     8: (<><label className="lbl">Phone</label><input className="input" value={form.phone} onChange={(e) => set('phone', e.target.value)} /><label className="lbl">Email</label><input className="input" value={form.email} onChange={(e) => set('email', e.target.value)} /><label className="lbl">Website (optional)</label><input className="input" value={form.website} onChange={(e) => set('website', e.target.value)} /></>),
     9: (<><label className="lbl">Calendar</label><select className="select" value={form.calendar} onChange={(e) => set('calendar', e.target.value)}><option value="internal">Built-in scheduler (works now)</option><option value="google">Google Calendar (connect in Integrations)</option></select></>),
@@ -73,7 +87,7 @@ export default function Onboarding() {
         <div style={{ display: 'flex', gap: 10, marginTop: 16, justifyContent: 'space-between' }}>
           <button className="btn btn-ghost" disabled={step === 1} onClick={() => setStep((s) => Math.max(1, s - 1))}>Back</button>
           {step < 14 ? (
-            <button className="btn btn-primary" onClick={() => setStep((s) => Math.min(14, s + 1))} disabled={step === 1 && !form.name.trim()}>Continue</button>
+            <button className="btn btn-primary" onClick={next} disabled={step === 1 && !form.name.trim()}>Continue</button>
           ) : (
             <div style={{ display: 'flex', gap: 8 }}>
               <button className="btn btn-ghost" onClick={() => finish(false)}>Finish without test</button>
