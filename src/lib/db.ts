@@ -128,7 +128,9 @@ function sqlitePath(): string {
 
 async function getSqlite(): Promise<SqliteDb> {
   if (sdb) return sdb;
-  const { DatabaseSync } = await import('node:sqlite');
+  // Vite's resolver bundles do not know Node 24's node:sqlite builtin and try
+  // to resolve it as the bare "sqlite" package. Leave the import to Node.
+  const { DatabaseSync } = await import(/* @vite-ignore */ 'node:sqlite');
   const p = sqlitePath();
   fs.mkdirSync(path.dirname(p), { recursive: true });
   const fresh = !fs.existsSync(p);
