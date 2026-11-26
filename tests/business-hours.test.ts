@@ -202,6 +202,18 @@ describe('availability from structured business hours', () => {
     expect(utc).toEqual(['2026-11-30T10:00:00.000Z']);
   });
 
+  it('does not offer slots for wall-clock times skipped by daylight saving', () => {
+    const hours = schedule({ sun: { open: true, start: '02:30', end: '03:30' } }, 'America/New_York');
+    const now = new Date('2026-03-08T05:00:00.000Z'); // 00:00 EST; 02:30 does not exist on this date.
+    expect(generateSlots(hours, [], { now, days: 1 })).toEqual([]);
+  });
+
+  it('normalizes fractional durations to whole minutes', () => {
+    const hours = schedule({ mon: { open: true, start: '10:00', end: '12:00' } });
+    expect(generateSlots(hours, [], { now: sunday, days: 7, duration: 60.5 }))
+      .toEqual(generateSlots(hours, [], { now: sunday, days: 7, duration: 60 }));
+  });
+
   it('handles a day boundary in the business timezone', () => {
     const now = new Date('2026-11-30T23:30:00.000Z'); // Tue 01 Dec 05:00 IST
     const hours = schedule({ tue: { open: true, start: '10:00', end: '20:00' } });
