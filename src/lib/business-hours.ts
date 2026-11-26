@@ -50,7 +50,7 @@ export const businessHoursSchema = z.object({
   version: z.literal(1),
   timezone: z.string().refine(isValidTimeZone, 'Unknown timezone'),
   status: z.enum(['configured', 'needs-configuration']),
-  legacySummary: z.string().max(500).optional(),
+  legacySummary: z.string().max(20000).optional(),
   days: z.record(z.enum(WEEKDAYS), dayHoursSchema),
 }).superRefine((hours, ctx) => {
   const openDays = Object.values(hours.days).filter((d) => d.open).length;
@@ -75,12 +75,28 @@ function completeDays(days: Partial<Record<Weekday, DayHours>>): Record<Weekday,
   return full;
 }
 
+const LEGACY_MAX = 20000;
+
+/** Keep the original legacy payload verbatim so migration never destroys it. */
+function legacyText(input: unknown): string | undefined {
+  if (input == null) return undefined;
+  let text: string;
+  if (typeof input === 'string') text = input;
+  else if (typeof input === 'object') {
+    const obj = input as Record<string, unknown>;
+    if (typeof obj.legacySummary === 'string') text = obj.legacySummary;
+    else if (typeof obj.summary === 'string') text = obj.summary;
+    else text = JSON.stringify(input);
+  } else text = String(input);
+  return text ? text.slice(0, LEGACY_MAX) : undefined;
+}
+
 /** Parse stored hours; fall back to an explicitly unconfigured schedule. */
 export function normalizeBusinessHours(input: unknown): BusinessHours {
   const parsed = businessHoursSchema.safeParse(input);
   if (parsed.success) return { ...parsed.data, days: completeDays(parsed.data.days) };
-  const summary = (input as { summary?: unknown } | null)?.summary;
-  return { ...emptyBusinessHours(), ...(typeof summary === 'string' ? { legacySummary: summary.slice(0, 500) } : {}) };
+  const legacy = legacyText(input);
+  return { ...emptyBusinessHours(), ...(legacy ? { legacySummary: legacy } : {}) };
 }
 
 export type HoursFormDay = { open: boolean; start: string; end: string };
@@ -116,9 +132,21 @@ export function formToHours(form: HoursForm): BusinessHours {
 export function legacyHoursMigrationValue(raw: string | null | undefined): string | null {
   if (!raw || !raw.trim()) return JSON.stringify(emptyBusinessHours());
   let parsed: unknown;
-  try { parsed = JSON.parse(raw); } catch { parsed = null; }
+  try { parsed = JSON.parse(raw); } catch { parsed = undefined; }
   if (businessHoursSchema.safeParse(parsed).success) return null;
-  return JSON.stringify(normalizeBusinessHours(parsed));
+  return JSON.stringify(normalizeBusinessHours(parsed === null || parsed === undefined ? raw : parsed));
+}
+
+/** Plan idempotent row updates, retaining each original value for a guarded UPDATE. */
+export function planLegacyHoursMigration(
+  rows: ReadonlyArray<{ id: string; hours_json: string }>,
+): Array<{ id: string; value: string; previous: string }> {
+  const updates: Array<{ id: string; value: string; previous: string }> = [];
+  for (const row of rows) {
+    const value = legacyHoursMigrationValue(row.hours_json);
+    if (value) updates.push({ id: row.id, value, previous: row.hours_json });
+  }
+  return updates;
 }
 
 type ZonedParts = { year: number; month: number; day: number; hour: number; minute: number };
