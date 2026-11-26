@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   businessHoursSchema,
   emptyBusinessHours,
+  formToHours,
+  hoursToForm,
   legacyHoursMigrationValue,
   normalizeBusinessHours,
   type BusinessHours,
@@ -73,6 +75,34 @@ describe('structured business hours validation', () => {
   it('rejects invalid structured hours through the business API schema', () => {
     const result = businessSchema.safeParse({ hours: schedule({ mon: { open: true } }) });
     expect(result.success).toBe(false);
+  });
+});
+
+describe('business hours form mapping', () => {
+  it('loads structured hours into editable form state', () => {
+    const form = hoursToForm(schedule({ mon: { open: true, start: '09:30', end: '18:00' } }, 'UTC'));
+    expect(form.timezone).toBe('UTC');
+    expect(form.days.mon).toEqual({ open: true, start: '09:30', end: '18:00' });
+    expect(form.days.tue).toEqual({ open: false, start: '', end: '' });
+  });
+
+  it('shows legacy hours as unconfigured rather than guessing times', () => {
+    const form = hoursToForm({ summary: 'Mon–Sat 10:00–20:00' });
+    expect(form.timezone).toBe('Asia/Kolkata');
+    expect(Object.values(form.days).every((d) => !d.open)).toBe(true);
+  });
+
+  it('builds validated structured hours from the form', () => {
+    const form = hoursToForm(schedule({ fri: { open: true, start: '10:00', end: '20:00' } }));
+    const hours = formToHours(form);
+    expect(hours.status).toBe('configured');
+    expect(hours.days.fri).toEqual({ open: true, start: '10:00', end: '20:00' });
+  });
+
+  it('rejects an open day without valid times before saving', () => {
+    const form = hoursToForm(schedule({ fri: { open: true, start: '10:00', end: '20:00' } }));
+    form.days.fri.end = '';
+    expect(() => formToHours(form)).toThrow();
   });
 });
 
