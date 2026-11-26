@@ -6,6 +6,7 @@ import {
   hoursToForm,
   legacyHoursMigrationValue,
   normalizeBusinessHours,
+  planLegacyHoursMigration,
   type BusinessHours,
   type DayHours,
   type Weekday,
@@ -65,6 +66,30 @@ describe('structured business hours validation', () => {
     expect(migrated).toContain('Mon–Sat 10:00–20:00');
     const current = JSON.stringify(schedule({ mon: { open: true, start: '10:00', end: '20:00' } }));
     expect(legacyHoursMigrationValue(current)).toBeNull();
+  });
+
+  it('preserves an unrecognized legacy hours payload verbatim', () => {
+    const old = JSON.stringify({ mon: ['10:00', '20:00'], tue: ['10:00', '20:00'] });
+    const migrated = legacyHoursMigrationValue(old)!;
+    expect(JSON.parse(migrated).legacySummary).toBe(old);
+    expect(JSON.parse(migrated).status).toBe('needs-configuration');
+    expect(JSON.parse(migrated).days.mon.open).toBe(false);
+    expect(legacyHoursMigrationValue('Mon-Sat 10am-8pm')).toContain('Mon-Sat 10am-8pm');
+  });
+
+  it('plans migrations only for unrecognized rows and never drops the original value', () => {
+    const structured = JSON.stringify(schedule({ mon: { open: true, start: '10:00', end: '20:00' } }));
+    const old = JSON.stringify({ sat: ['09:00', '17:00'] });
+    const updates = planLegacyHoursMigration([
+      { id: 'b1', hours_json: structured },
+      { id: 'b2', hours_json: old },
+      { id: 'b3', hours_json: 'free text hours' },
+    ]);
+    expect(updates).toHaveLength(2);
+    expect(updates.map((u) => u.id)).toEqual(['b2', 'b3']);
+    expect(JSON.parse(updates[0]!.value).legacySummary).toBe(old);
+    expect(updates[0]!.previous).toBe(old);
+    expect(JSON.parse(updates[1]!.value).legacySummary).toBe('free text hours');
   });
 
   it('accepts structured hours through the business API schema', () => {
