@@ -57,13 +57,13 @@ Branch commits (oldest → newest): `8b0095f` (RED tests), `f21a454` (structured
   "days": {
     "mon": { "open": true, "start": "10:00", "end": "20:00" },
     "tue": { "open": false },
-    "...": "sun..sat, all seven keys always present"
+    "...": "sun..sat; all seven keys are filled on read, a stored PUT may be partial"
   },
-  "legacySummary": "optional original free text"
+  "legacySummary": "optional original legacy payload (free text or raw JSON), up to 20k chars"
 }
 ```
 
-Validation rules (zod): version must be `1`; timezone must be a valid IANA name (`Intl.DateTimeFormat` check); `status` is `configured` or `needs-configuration`; each weekday has an `open` boolean; an open day requires `HH:MM` `start`/`end` with `end > start`; a closed day cannot carry times; unknown keys are rejected. `normalizeBusinessHours()` maps any legacy/unstructured input to an explicit needs-configuration object without inventing availability.
+Validation rules (zod): version must be `1`; timezone must be a valid IANA name (`Intl.DateTimeFormat` check); `status` is `configured` or `needs-configuration`; each weekday has an `open` boolean; an open day requires `HH:MM` `start`/`end` with `end > start`; a closed day cannot carry times. Zod 3 strips unknown keys rather than rejecting them. `normalizeBusinessHours()` maps any legacy/unstructured input to an explicit needs-configuration object without inventing availability, and keeps the original payload in `legacySummary`.
 
 Timezone default: the repository has no existing business timezone field; the only established model is `formatWhen()` in `src/lib/messaging.ts`, which assumes `Asia/Kolkata`. The structured model therefore stores an explicit IANA timezone and defaults migrated/unconfigured businesses to `Asia/Kolkata`, matching the product's existing India-first behavior. This is a timezone default only, never an invented opening hour.
 
@@ -84,25 +84,25 @@ Timezone default: the repository has no existing business timezone field; the on
 - enforces `start + duration <= end`, applies `bufferMin` between slot starts, and excludes appointments overlapping a candidate slot;
 - preserves the existing defaults (`days: 7`, `duration: 60`, `bufferMin: 0`) and the existing `/api/appointments/slots` limits (1–14 days, 15–240 minutes, first 12 returned).
 
-`freeSlotsForBusiness()` runs the legacy migration first, then reads `hours_json` and booked/confirmed appointments as before. No appointment creation was added.
+`freeSlotsForBusiness()` runs the legacy migration first — a one-per-process, guarded row UPDATE for any non-v1 `hours_json` — then reads `hours_json` and booked/confirmed appointments as before. No appointment creation was added. Fractional `duration`/`bufferMin` values are floored to whole minutes, and wall times skipped by a daylight-saving jump (e.g. 02:30 at US spring-forward) produce no slot rather than an unintended instant.
 
 ## 7. Tests added
 
-- `tests/business-hours.test.ts` (22 tests): structured schema acceptance/rejection (missing times, `end <= start`, bad times, unknown timezone), legacy normalization preserving text without invented days, migration-value behavior, business API schema acceptance/rejection, form↔structured mapping, weekday-only generation, closed days, per-day times, closing-time boundary, 90-minute duration and 30-minute buffer, no availability for legacy/missing hours, booked-slot exclusion, Asia/Kolkata vs UTC conversion, and a timezone day-boundary case.
+- `tests/business-hours.test.ts` (26 tests): structured schema acceptance/rejection (missing times, `end <= start`, bad times, unknown timezone), legacy normalization preserving text/day-keyed JSON without invented days, migration-value and migration-planning behavior (guarded updates, `previous` value retained, structured rows skipped), business API schema acceptance/rejection, form↔structured mapping, weekday-only generation, closed days, per-day times, closing-time boundary, 90-minute duration and 30-minute buffer, no availability for legacy/missing hours, booked-slot exclusion, Asia/Kolkata vs UTC conversion, a timezone day-boundary case, DST spring-forward gap, and fractional durations.
 - `tests/business-persistence.test.ts` (1 test): business UPDATE SQL contains no `GREATEST`, contains the CASE expression and `hours_json=?`, and binds hours JSON plus business id in the right positions. It was proved to fail (`RED_EXIT=1`, `expected ... not to contain 'GREATEST'`) when the SQL was temporarily reverted to the old expression in the sandbox.
 - Existing 25 tests were retained unchanged.
 
-TDD evidence: new tests failed before implementation (missing `business-hours` module; missing `business-update` module; form helpers missing). An early timezone implementation failed 8/18 availability tests with a 5.5-hour oscillation; root cause was a convergence comparison in `localWallTimeToUtc`, fixed by comparing against the target wall time. After fixes, all tests pass.
+TDD evidence: new tests failed before implementation (missing `business-hours` module; missing `business-update` module; form helpers missing; missing `planLegacyHoursMigration`; legacy day-keyed payload lost). An early timezone implementation failed 8/18 availability tests with a 5.5-hour oscillation; root cause was a convergence comparison in `localWallTimeToUtc`, fixed by comparing against the target wall time. Final reviewer fixes also ran RED→GREEN: DST-gap/fractional-duration tests failed at `96a2c18` (`RED2_EXIT=1`, returned `2026-03-08T07:30:00.000Z` for a skipped 02:30 wall time and 1 slot for a 60.5-minute duration), then passed at `0305f39`. After fixes, all tests pass.
 
 ## 8. Test, typecheck and build results
 
-Local Windows has no Node/npm; all checks ran in a disposable Vercel Sandbox (`node v24.22.3`, `npm 11.19.1`) at commit `b586f0b`. Sandbox session `sbx_dZmI8yLL5gnODF354enbgji7wfBl`; no production URL/secret was used.
+Local Windows has no Node/npm; all checks ran in disposable Vercel Sandboxes (`node v24.22.3`, `npm 11.19.1`). The final full run was at commit `0305f3954068c0a477390bb35a3cb0453cd7eb06` in sandbox `sbx_gc6gRitNMZ2y8oe9dnoFVeLNZeQ5`; earlier build/mobile QA ran at `da75231` in `sbx_dZmI8yLL5gnODF354enbgji7wfBl`. No production URL/secret was used.
 
 | Command | Exit | Result |
 |---|---|---|
 | `npm ci --no-audit --no-fund` | 0 | 131 packages installed |
 | `npm run typecheck` | 0 | `tsc --noEmit` clean |
-| `npm test` | 0 | 8 files, **48/48 tests passed** (22 business-hours, 1 business-persistence, 5 guard, 6 email, 4 dialect, 3 AI, 4 billing, 3 Razorpay). Guard `api-error` stderr is expected test logging. |
+| `npm test` | 0 | 8 files, **52/52 tests passed** (26 business-hours, 1 business-persistence, 5 guard, 6 email, 4 dialect, 3 AI, 4 billing, 3 Razorpay). Guard `api-error` stderr is expected test logging. |
 | `npm run build` | 0 | Next 14.2.5 compiled successfully, 58 static pages generated |
 | `QA_BASE=http://localhost:3100 npm run qa:mobile` | 0 | 10 PASS, all overflow 0 px (home, hamburger/nav, pricing, login, app, leads, automations, conversations, onboarding) |
 
@@ -115,8 +115,9 @@ Errors encountered and resolved: (1) build initially failed with `Can't resolve 
 - One operating interval per weekday; no split shifts, holidays, or per-service durations in hours configuration.
 - No automatic completion of customer bookings: slot acceptance and overlap-safe transactional booking remain Phase 1B.
 - `bufferMin` is supported by `generateSlots()` but not exposed by `/api/appointments/slots` (unchanged API surface).
-- Legacy free-text hours are never parsed into structured hours: affected businesses are explicitly marked `needs-configuration` and must be edited in onboarding/settings. Their original text is preserved in `legacySummary`.
+- Legacy hours are never parsed into structured hours: affected businesses are explicitly marked `needs-configuration` and must be edited in onboarding/settings. Any unrecognized payload (free text **or** the old day-keyed JSON arrays) is preserved verbatim in `legacySummary`; `planLegacyHoursMigration()` is unit-tested to prove no original value is dropped. A real DB round-trip remains covered only by the sandbox API check, because Vitest 2.1 cannot resolve Node 24's `node:sqlite` builtin.
 - Migration is one-per-process and value-based; it does not add a schema column or unique constraint. If a future deployment changes `hours_json` shape again, a new version/normalizer will be needed.
+- Final review findings were addressed after the first pass: legacy data-loss hazard (fixed at `005df57`), DST spring-forward gap and fractional `duration` (fixed at `0305f39`). Valid near-now slots are still rounded to the next whole hour, matching the pre-existing generator behavior.
 - No CI enforcement exists yet (no `.github/` workflows); the verification commands were run manually in a sandbox, not by an automated gate.
 - Standalone `.mjs` check scripts were not run: several default to production or mutate demo data. No live email/WhatsApp/payment path was exercised.
 - The Vercel production site remains on the old deployment; this branch is not linked/deployed to Vercel in this phase.

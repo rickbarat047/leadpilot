@@ -7,14 +7,15 @@
 - Phase 2 complete (TDD RED): added `tests/business-hours.test.ts` (18 initially, later 22) and later `tests/business-persistence.test.ts`; watched failures for missing modules and SQL assertions before implementation.
 - Phase 3-6 implemented via RED→GREEN commits: structured hours model, migration, hours editor, slot generation, dialect-neutral business update. Fixed timezone convergence bug found by 8 failing availability tests.
 - Phase 7 complete: fresh sandbox verification — `npm ci` 0, typecheck 0, `npm test` 0 (8 files/48 tests), build 0 (58 pages), mobile QA 0 (10 PASS), safe local API check passed. Sandbox stopped once at timeout; fresh sandbox created from commit and all checks re-run.
-- Phase 8 complete: wrote `docs/LEADPILOT_PHASE_1A_REPORT.md` with all 10 required sections; updated planning files; stopped for review. No Phase 1B work started.
+- Final review fixes: RED tests at `c037d12` and `96a2c18`; GREEN commits `005df57` (preserve any unrecognized legacy payload verbatim in `legacySummary`; add `planLegacyHoursMigration` with guarded updates + tests) and `0305f39` (skip nonexistent DST wall-clock times; floor fractional duration/buffer). Final fresh verification at `0305f39`: typecheck 0, `npm test` 0 — 8 files/52 tests, build 0. No UI changed after mobile QA.
+- Phase 8 complete: wrote `docs/LEADPILOT_PHASE_1A_REPORT.md` with all 10 required sections, updated with final reviewer-fix evidence; updated planning files; stopped for review. No Phase 1B work started.
 
 ## Test Results
 
 | Test | Input | Expected | Actual | Status |
 |---|---|---|---|---|
 | `npm run typecheck` | full repo | exit 0 | exit 0 | pass |
-| `npm test` | full suite | all green | 8 files / 48 tests passed | pass |
+| `npm test` | full suite | all green | 8 files / 52 tests passed (26 business-hours) | pass |
 | `npm run build` | production build | exit 0 | exit 0, 58 pages | pass |
 | `QA_BASE=http://localhost:3100 npm run qa:mobile` | local server | no overflow | 10 PASS, 0 px overflow | pass |
 | Local API hours round-trip | structured hours PUT | exact hours returned | exact hours returned | pass |

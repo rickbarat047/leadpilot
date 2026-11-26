@@ -18,9 +18,9 @@
 - `src/lib/slots.ts`: generate slots from structured hours in business-local calendar; iterative local→UTC conversion; duration/buffer/closing boundary/booked overlap honored; returns `[]` for missing/legacy/unconfigured.
 - UI: `src/components/hours-editor.tsx` used by onboarding and settings; real API persistence; validation errors surfaced.
 
-## Verification evidence (fresh, final commit b586f0b)
+## Verification evidence (fresh, final commit 0305f39)
 
-- `npm ci` exit 0; `npm run typecheck` exit 0; `npm test` exit 0 — 8 files / 48 tests.
+- `npm ci` exit 0; `npm run typecheck` exit 0; `npm test` exit 0 — 8 files / 52 tests (26 business-hours).
 - `npm run build` exit 0 — 58 pages.
 - `QA_BASE=http://localhost:3100 npm run qa:mobile` exit 0 — 10 PASS, overflow 0 px.
 - Local API: seed 200, login 200, PUT hours 200, GET returns exact configured schedule, invalid PUT 400, slots total 13 only on configured Mon/Wed in IST.
