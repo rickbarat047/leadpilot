@@ -34,9 +34,9 @@ export function generateSlots(
   if (schedule.status !== 'configured') return [];
 
   const days = opts.days ?? 7;
-  const duration = opts.duration ?? 60;
+  const duration = Math.floor(opts.duration ?? 60);
   const now = opts.now ?? new Date();
-  const buffer = opts.bufferMin ?? 0;
+  const buffer = Math.floor(opts.bufferMin ?? 0);
   const slots: string[] = [];
 
   const bookedRanges = booked.map((b) => ({
@@ -59,7 +59,7 @@ export function generateSlots(
     for (let m = openMin; m + duration <= closeMin; m += duration + buffer) {
       if (i === 0 && m < earliestToday) continue;
       const slotStart = localWallTimeToUtc(date, minutesToTime(m), schedule.timezone);
-      if (slotStart.getTime() <= now.getTime()) continue;
+      if (!slotStart || slotStart.getTime() <= now.getTime()) continue;
       const slotEnd = slotStart.getTime() + duration * 60000;
       const clash = bookedRanges.some((b) => slotStart.getTime() < b.end && slotEnd > b.start);
       if (clash) continue;

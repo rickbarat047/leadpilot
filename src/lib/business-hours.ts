@@ -188,20 +188,21 @@ export function weekdayOfLocalDate(localDate: string): Weekday {
   return WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
 }
 
-/** Convert a local wall-clock time on a calendar date to a UTC instant. */
-export function localWallTimeToUtc(localDate: string, time: string, timeZone: string): Date {
+/** Convert a local wall-clock time on a calendar date to a UTC instant.
+ * Returns null for times skipped by a daylight-saving jump. */
+export function localWallTimeToUtc(localDate: string, time: string, timeZone: string): Date | null {
   const minutes = hhmm(time);
   const [y, m, d] = localDate.split('-').map(Number);
   const target = Date.UTC(y, m - 1, d, Math.floor(minutes / 60), minutes % 60);
   let instant = new Date(target);
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 4; i++) {
     const p = zonedParts(instant, timeZone);
     const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute);
     const delta = target - asUtc;
-    if (delta === 0) break;
+    if (delta === 0) return instant;
     instant = new Date(instant.getTime() + delta);
   }
-  return instant;
+  return null; // nonexistent wall time (spring-forward gap)
 }
 
 export function minutesToTime(minutes: number): string {
