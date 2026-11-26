@@ -8,7 +8,7 @@ import { normalizeBusinessHours } from '@/lib/business-hours';
 export const GET = guard(async (req: NextRequest) => {
   const { error, businessId } = await requireBusiness(req);
   if (error || !businessId) return error;
-  const biz = await get(`SELECT * FROM businesses WHERE id=?`, businessId);
+  const biz = await get<{ hours_json: string }>(`SELECT * FROM businesses WHERE id=?`, businessId);
   const services = await all(`SELECT * FROM services WHERE business_id=? ORDER BY name`, businessId);
   const sub = await get(`SELECT * FROM subscriptions WHERE business_id=?`, businessId);
   let hours: unknown = {};

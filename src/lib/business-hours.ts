@@ -2,7 +2,6 @@
 // Stored in businesses.hours_json as a versioned JSON document. Free-text
 // legacy summaries are never treated as verified opening hours.
 import { z } from 'zod';
-import { all, run } from './db';
 
 export const WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
 export type Weekday = (typeof WEEKDAYS)[number];
@@ -70,10 +69,16 @@ export function emptyBusinessHours(timezone = 'Asia/Kolkata'): BusinessHours {
   return { version: 1, timezone, status: 'needs-configuration', days };
 }
 
+function completeDays(days: Partial<Record<Weekday, DayHours>>): Record<Weekday, DayHours> {
+  const full = {} as Record<Weekday, DayHours>;
+  for (const day of WEEKDAYS) full[day] = days[day] ?? { open: false };
+  return full;
+}
+
 /** Parse stored hours; fall back to an explicitly unconfigured schedule. */
 export function normalizeBusinessHours(input: unknown): BusinessHours {
   const parsed = businessHoursSchema.safeParse(input);
-  if (parsed.success) return parsed.data;
+  if (parsed.success) return { ...parsed.data, days: completeDays(parsed.data.days) };
   const summary = (input as { summary?: unknown } | null)?.summary;
   return { ...emptyBusinessHours(), ...(typeof summary === 'string' ? { legacySummary: summary.slice(0, 500) } : {}) };
 }
@@ -104,7 +109,7 @@ export function formToHours(form: HoursForm): BusinessHours {
   const status = Object.values(days).some((d) => d.open) ? 'configured' : 'needs-configuration';
   const parsed = businessHoursSchema.safeParse({ version: 1, timezone: form.timezone, status, days });
   if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? 'Invalid business hours');
-  return parsed.data;
+  return { ...parsed.data, days: completeDays(parsed.data.days) };
 }
 
 /** Value to store for a legacy row, or null when the row is already structured. */
@@ -114,24 +119,6 @@ export function legacyHoursMigrationValue(raw: string | null | undefined): strin
   try { parsed = JSON.parse(raw); } catch { parsed = null; }
   if (businessHoursSchema.safeParse(parsed).success) return null;
   return JSON.stringify(normalizeBusinessHours(parsed));
-}
-
-let migration: Promise<void> | null = null;
-/** Idempotent, dialect-neutral data migration; preserves the legacy text. */
-export function migrateLegacyBusinessHours(): Promise<void> {
-  if (!migration) {
-    migration = (async () => {
-      const rows = await all<{ id: string; hours_json: string }>('SELECT id, hours_json FROM businesses');
-      for (const row of rows) {
-        const value = legacyHoursMigrationValue(row.hours_json);
-        if (value) await run('UPDATE businesses SET hours_json=? WHERE id=? AND hours_json=?', value, row.id, row.hours_json);
-      }
-    })().catch((e) => {
-      migration = null;
-      console.error('[business-hours migration]', e instanceof Error ? e.message : e);
-    });
-  }
-  return migration;
 }
 
 type ZonedParts = { year: number; month: number; day: number; hour: number; minute: number };

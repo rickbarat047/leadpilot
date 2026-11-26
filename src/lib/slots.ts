@@ -8,11 +8,11 @@ import {
   businessLocalDate,
   localMinutesInTimeZone,
   localWallTimeToUtc,
-  migrateLegacyBusinessHours,
   minutesToTime,
   normalizeBusinessHours,
   weekdayOfLocalDate,
 } from './business-hours';
+import { migrateLegacyBusinessHours } from './business-hours-migration';
 
 export type SlotOptions = {
   days?: number;       // how many days ahead to scan (default 7)
