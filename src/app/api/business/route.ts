@@ -4,6 +4,7 @@ import { get, run, all } from '@/lib/db';
 import { businessSchema } from '@/lib/validation';
 import { overview, seriesBookings } from '@/lib/analytics';
 import { normalizeBusinessHours } from '@/lib/business-hours';
+import { businessUpdateSql } from '@/lib/business-update';
 
 export const GET = guard(async (req: NextRequest) => {
   const { error, businessId } = await requireBusiness(req);
@@ -27,11 +28,12 @@ export const PUT = guard(async (req: NextRequest) => {
   const settings = { ...(cur ? JSON.parse(cur.settings_json || '{}') : {}), ...(typeof b.settings === 'object' ? b.settings : {}) };
   let currentHours: unknown = {};
   try { currentHours = cur ? JSON.parse(cur.hours_json || '{}') : {}; } catch { currentHours = {}; }
-  await run(`UPDATE businesses SET name=COALESCE(?, name), industry=COALESCE(?, industry), description=COALESCE(?, description),
-    location=COALESCE(?, location), phone=COALESCE(?, phone), email=COALESCE(?, email), website=COALESCE(?, website),
-    hours_json=?, settings_json=?, onboarding_step=GREATEST(onboarding_step, 8) WHERE id=?`,
-    b.name ?? null, b.industry ?? null, b.description ?? null, b.location ?? null, b.phone ?? null, b.email ?? null, b.website ?? null,
-    JSON.stringify(b.hours ?? currentHours), JSON.stringify(settings), businessId);
+  const update = businessUpdateSql({
+    name: b.name ?? null, industry: b.industry ?? null, description: b.description ?? null,
+    location: b.location ?? null, phone: b.phone ?? null, email: b.email ?? null, website: b.website ?? null,
+    hoursJson: JSON.stringify(b.hours ?? currentHours), settingsJson: JSON.stringify(settings), businessId,
+  });
+  await run(update.sql, ...update.params);
   if (Array.isArray((body as Record<string, unknown>).services)) {
     await run(`DELETE FROM services WHERE business_id=?`, businessId);
     const { uid } = await import('@/lib/ids');
