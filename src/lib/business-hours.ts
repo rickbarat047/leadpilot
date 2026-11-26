@@ -148,13 +148,14 @@ export function weekdayOfLocalDate(localDate: string): Weekday {
 export function localWallTimeToUtc(localDate: string, time: string, timeZone: string): Date {
   const minutes = hhmm(time);
   const [y, m, d] = localDate.split('-').map(Number);
-  let instant = new Date(Date.UTC(y, m - 1, d, Math.floor(minutes / 60), minutes % 60));
+  const target = Date.UTC(y, m - 1, d, Math.floor(minutes / 60), minutes % 60);
+  let instant = new Date(target);
   for (let i = 0; i < 3; i++) {
     const p = zonedParts(instant, timeZone);
     const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute);
-    const delta = asUtc - instant.getTime();
+    const delta = target - asUtc;
     if (delta === 0) break;
-    instant = new Date(instant.getTime() - delta);
+    instant = new Date(instant.getTime() + delta);
   }
   return instant;
 }
