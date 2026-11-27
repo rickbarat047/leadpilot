@@ -23,7 +23,7 @@ New:
 - `src/lib/business-hours-migration.ts` — server-only idempotent legacy-row migration.
 - `src/lib/business-update.ts` — dialect-neutral business UPDATE builder.
 - `src/components/hours-editor.tsx` — reusable weekday hours editor.
-- `tests/business-hours.test.ts` — 22 tests.
+- `tests/business-hours.test.ts` — 26 tests.
 - `tests/business-persistence.test.ts` — 1 test for SQLite-compatible update SQL.
 - `docs/LEADPILOT_PHASE_1A_REPORT.md` — this report.
 
@@ -37,7 +37,7 @@ Modified:
 - `db/schema.sqlite.sql`, `db/schema.postgres.sql` — documentation comment on `hours_json` (no column type change required; both already use TEXT).
 - Planning files under `.planning/2026-11-26-leadpilot-phase0-audit/` and `.planning/2026-11-26-2026-11-26-leadpilot-phase1a-business-ho/`.
 
-Branch commits (oldest → newest): `8b0095f` (RED tests), `f21a454` (structured hours + slots), `f47f462` (timezone conversion), `eba4360` (RED form-mapping tests), `6badbed` (hours editor + schema comments), `fa8d1ed` (client-safe split/typecheck fixes), `0a54ec2` (RED business-update test), `1f97fef` (dialect-neutral update), `a6ef985` (attempted Vite annotation — ineffective), `b586f0b` (revert annotation + runner-safe SQL assertion test).
+Branch commits (oldest → newest): `8b0095f` (RED tests), `f21a454` (structured hours + slots), `f47f462` (timezone conversion), `eba4360` (RED form-mapping tests), `6badbed` (hours editor + schema comments), `fa8d1ed` (client-safe split/typecheck fixes), `0a54ec2` (RED business-update test), `1f97fef` (dialect-neutral update), `a6ef985` (attempted Vite annotation — ineffective), `b586f0b` (revert annotation + runner-safe SQL assertion test), `c037d12` (RED: legacy payload preservation), `005df57` (legacy payload preservation and migration planning), `96a2c18` (RED: DST gap and fractional duration), `0305f39` (DST-gap and fractional-duration fixes), `f7fe21f` (final report and planning update). The final code commit is `0305f39`; the only later commit (`f7fe21f`) changed documentation and planning files, not source or tests.
 
 ## 3. Database and migration changes
 
@@ -106,7 +106,11 @@ Local Windows has no Node/npm; all checks ran in disposable Vercel Sandboxes (`n
 | `npm run build` | 0 | Next 14.2.5 compiled successfully, 58 static pages generated |
 | `QA_BASE=http://localhost:3100 npm run qa:mobile` | 0 | 10 PASS, all overflow 0 px (home, hamburger/nav, pricing, login, app, leads, automations, conversations, onboarding) |
 
-Safe local API check against the sandbox's own `next start` server (seeded demo data only, no email/WhatsApp): `POST /api/demo/seed` 200; login 200; PUT structured hours 200; GET returned the exact configured schedule; invalid hours (`20:00`→`10:00`) returned 400 `{"error":"Invalid input"}`; `GET /api/appointments/slots?days=7` returned `total=13` with slots only on 2026-11-30 (Mon) and 2026-12-02 (Wed), first slot `2026-11-30T04:30:00.000Z` (10:00 IST) — closed days produced no slots.
+Safe local API check against the sandbox's own `next start` server (seeded demo data only, no email/WhatsApp). **Database backend: SQLite**, using the repository's default file database — `DATABASE_URL` was unset in the sandbox, so `src/lib/config.ts:5-6` selects `file:./data/leadpilot.db`; the earlier `no such function: GREATEST` error also confirmed SQLite. **No PostgreSQL runtime verification was performed**; the Postgres path was only checked by reading the schema and by the dialect-neutral SQL assertion described below.
+
+This was a real HTTP → API → database round-trip: `POST /api/demo/seed` 200; login 200; PUT structured hours 200; GET returned the exact configured schedule; invalid hours (`20:00`→`10:00`) returned 400 `{"error":"Invalid input"}`; `GET /api/appointments/slots?days=7` returned `total=13` with slots only on 2026-11-30 (Mon) and 2026-12-02 (Wed), first slot `2026-11-30T04:30:00.000Z` (10:00 IST) — closed days produced no slots.
+
+This round-trip is distinct from `tests/business-persistence.test.ts`: that test is a **pure SQL-string assertion** over `businessUpdateSql()` (checks for the absence of `GREATEST`, the `CASE` expression, `hours_json=?` and parameter order). It opens no database and executes no SQL. Real persistence evidence comes only from the SQLite API check above; the migration planner is covered by unit tests only.
 
 Errors encountered and resolved: (1) build initially failed with `Can't resolve 'net'/'tls'` because a client component imported server-only DB code — migration was split into `business-hours-migration.ts`; (2) typecheck initially failed on a loosely typed JSON.parse and zod `Partial` days — fixed with typed `get` and `completeDays()`; (3) `tests/business-persistence.test.ts` initially failed to load because Vite/Vitest 2.1 cannot resolve Node 24's `node:sqlite` builtin (Vite filters `node:`-prefixed builtins) — the test was rewritten as a pure SQL assertion and real persistence was verified through the local API check instead; the ineffective `/* @vite-ignore */` experiment was reverted in `b586f0b`.
 
@@ -126,15 +130,15 @@ Errors encountered and resolved: (1) build initially failed with `Can't resolve 
 
 1. Review and merge/rebase the feature branch `phase-1a-business-hours` into `main` (or open a PR) when Phase 1A is approved.
 2. After deployment, ask existing businesses with legacy free-text hours to configure weekdays in Settings → Opening hours (the system will show no invented availability until they do).
-3. If the project is connected to a shared database later, confirm the standard runtime migration path still succeeds; no bespoke SQL repair is required for `hours_json`.
+3. If the project is connected to a PostgreSQL database later, actually verify the runtime migration and structured-hours round-trip there; this phase verified only SQLite at runtime. No bespoke SQL repair is expected for `hours_json`, but PostgreSQL execution is not yet evidenced.
 4. Add CI enforcement for `typecheck`, `test`, `build` and mobile QA before treating this as production-hardened (follow-up work, not part of Phase 1A).
 
 ## Acceptance assessment
 
 - Structured, validated hours: **met** (zod schema + API validation + UI mapping).
-- Existing records handled safely; both DB backends consistent: **met** (TEXT column unchanged, generic migration, dialect-neutral update tested on SQLite).
-- Owners can configure and save real hours: **met** (onboarding + settings, verified via local API).
-- Availability generated from hours: **met** (unit tests + local API slot check).
-- Regression tests, existing suite, typecheck, build: **met** (48/48, exit 0, exit 0).
+- Existing records handled safely; both DB schemas consistent: **met** (TEXT column unchanged in both schema files; generic migration and dialect-neutral update). Runtime verification was SQLite only; PostgreSQL execution was not performed.
+- Owners can configure and save real hours: **met** (onboarding + settings, verified via local SQLite API round-trip).
+- Availability generated from hours: **met** (unit tests + local SQLite API slot check).
+- Regression tests, existing suite, typecheck, build: **met** (52/52 tests, typecheck exit 0, build exit 0).
 - Documented with actual evidence: **met** by this report.
 - Phase 1B work: **not started**, by design.
