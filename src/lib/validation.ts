@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { businessHoursSchema } from './business-hours';
 
 export const signupSchema = z.object({
   name: z.string().min(1).max(80),
@@ -26,6 +27,6 @@ export const businessSchema = z.object({
   phone: z.string().max(40).optional(),
   email: z.string().max(160).optional(),
   website: z.string().max(200).optional(),
-  hours: z.record(z.string()).optional(),
+  hours: businessHoursSchema.optional(),
   settings: z.record(z.unknown()).optional(),
 });

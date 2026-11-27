@@ -1,0 +1,210 @@
+// Structured business hours + timezone helpers.
+// Stored in businesses.hours_json as a versioned JSON document. Free-text
+// legacy summaries are never treated as verified opening hours.
+import { z } from 'zod';
+
+export const WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
+export type Weekday = (typeof WEEKDAYS)[number];
+export type DayHours = { open: boolean; start?: string; end?: string };
+export type BusinessHours = {
+  version: 1;
+  timezone: string;
+  status: 'configured' | 'needs-configuration';
+  legacySummary?: string;
+  days: Record<Weekday, DayHours>;
+};
+
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+function hhmm(value: string): number {
+  const [h, m] = value.split(':').map(Number);
+  return h * 60 + m;
+}
+
+export function isValidTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export const dayHoursSchema = z.object({
+  open: z.boolean(),
+  start: z.string().regex(TIME_RE).optional(),
+  end: z.string().regex(TIME_RE).optional(),
+}).superRefine((day, ctx) => {
+  if (day.open && (!day.start || !day.end)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Opening and closing times are required for an open day' });
+  }
+  if (!day.open && (day.start || day.end)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A closed day must not have times' });
+  }
+  if (day.start && day.end && hhmm(day.end) <= hhmm(day.start)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Closing time must be later than opening time' });
+  }
+});
+
+export const businessHoursSchema = z.object({
+  version: z.literal(1),
+  timezone: z.string().refine(isValidTimeZone, 'Unknown timezone'),
+  status: z.enum(['configured', 'needs-configuration']),
+  legacySummary: z.string().max(20000).optional(),
+  days: z.record(z.enum(WEEKDAYS), dayHoursSchema),
+}).superRefine((hours, ctx) => {
+  const openDays = Object.values(hours.days).filter((d) => d.open).length;
+  if (hours.status === 'configured' && openDays === 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'At least one day must be open' });
+  }
+  if (hours.status === 'needs-configuration' && openDays > 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Open days require status configured' });
+  }
+});
+
+/** A complete, explicitly closed schedule. Never guesses opening hours. */
+export function emptyBusinessHours(timezone = 'Asia/Kolkata'): BusinessHours {
+  const days = {} as Record<Weekday, DayHours>;
+  for (const day of WEEKDAYS) days[day] = { open: false };
+  return { version: 1, timezone, status: 'needs-configuration', days };
+}
+
+function completeDays(days: Partial<Record<Weekday, DayHours>>): Record<Weekday, DayHours> {
+  const full = {} as Record<Weekday, DayHours>;
+  for (const day of WEEKDAYS) full[day] = days[day] ?? { open: false };
+  return full;
+}
+
+const LEGACY_MAX = 20000;
+
+/** Keep the original legacy payload verbatim so migration never destroys it. */
+function legacyText(input: unknown): string | undefined {
+  if (input == null) return undefined;
+  let text: string;
+  if (typeof input === 'string') text = input;
+  else if (typeof input === 'object') {
+    const obj = input as Record<string, unknown>;
+    if (typeof obj.legacySummary === 'string') text = obj.legacySummary;
+    else if (typeof obj.summary === 'string') text = obj.summary;
+    else text = JSON.stringify(input);
+  } else text = String(input);
+  return text ? text.slice(0, LEGACY_MAX) : undefined;
+}
+
+/** Parse stored hours; fall back to an explicitly unconfigured schedule. */
+export function normalizeBusinessHours(input: unknown): BusinessHours {
+  const parsed = businessHoursSchema.safeParse(input);
+  if (parsed.success) return { ...parsed.data, days: completeDays(parsed.data.days) };
+  const legacy = legacyText(input);
+  return { ...emptyBusinessHours(), ...(legacy ? { legacySummary: legacy } : {}) };
+}
+
+export type HoursFormDay = { open: boolean; start: string; end: string };
+export type HoursForm = { timezone: string; days: Record<Weekday, HoursFormDay> };
+
+/** Editable form state: explicit values only, no inferred hours. */
+export function hoursToForm(input: unknown): HoursForm {
+  const hours = normalizeBusinessHours(input);
+  const days = {} as Record<Weekday, HoursFormDay>;
+  for (const day of WEEKDAYS) {
+    const d = hours.days[day];
+    days[day] = { open: Boolean(d?.open), start: d?.start ?? '', end: d?.end ?? '' };
+  }
+  return { timezone: hours.timezone, days };
+}
+
+/** Validate and build the stored structure from form state; throws on bad input. */
+export function formToHours(form: HoursForm): BusinessHours {
+  const days = {} as Record<Weekday, DayHours>;
+  for (const day of WEEKDAYS) {
+    const d = form.days?.[day];
+    days[day] = d?.open
+      ? { open: true, start: (d.start ?? '').trim(), end: (d.end ?? '').trim() }
+      : { open: false };
+  }
+  const status = Object.values(days).some((d) => d.open) ? 'configured' : 'needs-configuration';
+  const parsed = businessHoursSchema.safeParse({ version: 1, timezone: form.timezone, status, days });
+  if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? 'Invalid business hours');
+  return { ...parsed.data, days: completeDays(parsed.data.days) };
+}
+
+/** Value to store for a legacy row, or null when the row is already structured. */
+export function legacyHoursMigrationValue(raw: string | null | undefined): string | null {
+  if (!raw || !raw.trim()) return JSON.stringify(emptyBusinessHours());
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { parsed = undefined; }
+  if (businessHoursSchema.safeParse(parsed).success) return null;
+  return JSON.stringify(normalizeBusinessHours(parsed === null || parsed === undefined ? raw : parsed));
+}
+
+/** Plan idempotent row updates, retaining each original value for a guarded UPDATE. */
+export function planLegacyHoursMigration(
+  rows: ReadonlyArray<{ id: string; hours_json: string }>,
+): Array<{ id: string; value: string; previous: string }> {
+  const updates: Array<{ id: string; value: string; previous: string }> = [];
+  for (const row of rows) {
+    const value = legacyHoursMigrationValue(row.hours_json);
+    if (value) updates.push({ id: row.id, value, previous: row.hours_json });
+  }
+  return updates;
+}
+
+type ZonedParts = { year: number; month: number; day: number; hour: number; minute: number };
+
+function zonedParts(date: Date, timeZone: string): ZonedParts {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(date);
+  const map: Record<string, number> = {};
+  for (const p of parts) if (p.type !== 'literal') map[p.type] = Number(p.value);
+  return { year: map.year, month: map.month, day: map.day, hour: map.hour, minute: map.minute };
+}
+
+function pad(n: number): string { return String(n).padStart(2, '0'); }
+
+/** Calendar date in the business's timezone, as YYYY-MM-DD. */
+export function businessLocalDate(date: Date, timeZone: string): string {
+  const p = zonedParts(date, timeZone);
+  return `${p.year}-${pad(p.month)}-${pad(p.day)}`;
+}
+
+/** Minutes since local midnight in the business's timezone. */
+export function localMinutesInTimeZone(date: Date, timeZone: string): number {
+  const p = zonedParts(date, timeZone);
+  return p.hour * 60 + p.minute;
+}
+
+/** Add calendar days without crossing DST boundaries incorrectly. */
+export function addLocalDays(localDate: string, days: number): string {
+  const [y, m, d] = localDate.split('-').map(Number);
+  const next = new Date(Date.UTC(y, m - 1, d + days));
+  return `${next.getUTCFullYear()}-${pad(next.getUTCMonth() + 1)}-${pad(next.getUTCDate())}`;
+}
+
+/** Weekday key for a YYYY-MM-DD calendar date. */
+export function weekdayOfLocalDate(localDate: string): Weekday {
+  const [y, m, d] = localDate.split('-').map(Number);
+  return WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+}
+
+/** Convert a local wall-clock time on a calendar date to a UTC instant.
+ * Returns null for times skipped by a daylight-saving jump. */
+export function localWallTimeToUtc(localDate: string, time: string, timeZone: string): Date | null {
+  const minutes = hhmm(time);
+  const [y, m, d] = localDate.split('-').map(Number);
+  const target = Date.UTC(y, m - 1, d, Math.floor(minutes / 60), minutes % 60);
+  let instant = new Date(target);
+  for (let i = 0; i < 4; i++) {
+    const p = zonedParts(instant, timeZone);
+    const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute);
+    const delta = target - asUtc;
+    if (delta === 0) return instant;
+    instant = new Date(instant.getTime() + delta);
+  }
+  return null; // nonexistent wall time (spring-forward gap)
+}
+
+export function minutesToTime(minutes: number): string {
+  return `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`;
+}

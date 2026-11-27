@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS businesses (
   phone text NOT NULL DEFAULT ''::text,
   email text NOT NULL DEFAULT ''::text,
   website text NOT NULL DEFAULT ''::text,
+  -- Structured business hours v1 JSON (version, timezone, status, days). Legacy free text is migrated to needs-configuration; no hours are inferred.
   hours_json text NOT NULL DEFAULT '{}'::text,
   settings_json text NOT NULL DEFAULT '{}'::text,
   onboarding_step int4 NOT NULL DEFAULT 0,
