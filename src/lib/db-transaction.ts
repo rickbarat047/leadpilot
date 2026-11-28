@@ -27,12 +27,13 @@ export function bookingTransaction(): TransactionAdapter {
     let began = false;
     return {
       async begin(): Promise<TransactionClient> {
-        client = await getPool().connect();
-        await client.query('BEGIN');
+        const c = await getPool().connect();
+        client = c;
+        await c.query('BEGIN');
         began = true;
         return {
-          async query<T extends TransactionRow = TransactionRow>(text: string, params: unknown[] = []): Promise<T[]> {
-            const result = await client!.query(toPgPlaceholders(text), params);
+          async query<T = TransactionRow>(text: string, params: unknown[] = []): Promise<T[]> {
+            const result = await c.query(toPgPlaceholders(text), params);
             return (result.rows ?? []) as T[];
           },
         };
@@ -59,7 +60,7 @@ export function bookingTransaction(): TransactionAdapter {
       db.exec('BEGIN IMMEDIATE');
       began = true;
       return {
-        async query<T extends TransactionRow = TransactionRow>(text: string, params: unknown[] = []): Promise<T[]> {
+        async query<T = TransactionRow>(text: string, params: unknown[] = []): Promise<T[]> {
           const stmt = db.prepare(text);
           if (/^\s*(select|pragma|explain|with)\b/i.test(text)) return stmt.all(...params) as T[];
           stmt.run(...params);
