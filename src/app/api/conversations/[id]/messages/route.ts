@@ -55,7 +55,7 @@ export const GET = guard(async (req: NextRequest, { params }: { params: { id: st
   if (error || !businessId) return error;
   const conv = await get(`SELECT c.id, c.lead_id, c.status, l.name AS lead_name, l.service FROM conversations c JOIN leads l ON l.id=c.lead_id WHERE c.id=? AND c.business_id=?`, params.id, businessId);
   if (!conv) return json({ error: 'Not found' }, 404);
-  const messages = await all(`SELECT id, sender, body, created_at FROM messages WHERE conversation_id=? ORDER BY created_at ASC LIMIT 200`, params.id);
+  const messages = await all(`SELECT id, sender, body, meta_json, created_at FROM messages WHERE conversation_id=? ORDER BY created_at ASC LIMIT 200`, params.id);
   return json({ conversation: conv, messages });
 });
 
