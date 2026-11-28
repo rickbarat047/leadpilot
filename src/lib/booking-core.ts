@@ -37,6 +37,9 @@ export function buildSlotOffer(input: BuildSlotOfferInput): SlotOffer {
 
 /** Parse an untrusted meta_json value without trusting its shape. */
 export function parseSlotOffer(value: unknown): SlotOffer | null {
+  if (typeof value === 'string') {
+    try { value = JSON.parse(value); } catch { return null; }
+  }
   if (!value || typeof value !== 'object') return null;
   const v = value as Record<string, unknown>;
   if (v.version !== 1 || v.type !== 'slot_offer') return null;
