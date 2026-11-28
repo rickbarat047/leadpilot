@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   buildSlotOffer,
   classifyOfferReply,
+  detectSelectionIntent,
   offerConsumed,
   offerDurationMatches,
   parseSlotOffer,
@@ -49,25 +50,40 @@ describe('slot offer identity and lifecycle', () => {
   });
 });
 
-describe('expired offer replies', () => {
-  const now = new Date('2026-11-29T11:00:00.000Z');
+describe('selection intent is detected before offer lifecycle', () => {
+  const now = new Date('2026-11-28T10:05:00.000Z');
+  const expiredNow = new Date('2026-11-29T11:00:00.000Z');
+  const consumed: SlotOffer = { ...offer, consumedAt: '2026-11-28T10:04:00.000Z', consumedBy: 'apt_1' };
 
-  for (const reply of ['1', '2', '3', 'option 2', 'yes please']) {
-    it(`never accepts ${reply} from an expired offer`, () => {
-      expect(classifyOfferReply(reply, offer, now)).toEqual({ kind: 'expired' });
+  for (const reply of ['What is your business address?', 'What are your working hours?', 'yes please', 'I have 2 questions about pricing']) {
+    it(`keeps ${reply} in normal conversation for a live offer`, () => {
+      expect(detectSelectionIntent(reply, offer)).toEqual({ kind: 'none' });
+      expect(classifyOfferReply(reply, offer, now)).toEqual({ kind: 'none' });
     });
   }
 
-  it('reports consumed offers before looking at the reply', () => {
-    const consumed: SlotOffer = { ...offer, consumedAt: '2026-11-28T10:05:00.000Z' };
-    expect(classifyOfferReply('2', consumed, new Date('2026-11-28T10:06:00.000Z'))).toEqual({ kind: 'consumed' });
+  for (const reply of ['What is your business address?', 'What are your working hours?', 'yes please', 'I have 2 questions about pricing']) {
+    it(`does not apply stale offer state to ${reply}`, () => {
+      expect(classifyOfferReply(reply, consumed, now)).toEqual({ kind: 'none' });
+      expect(classifyOfferReply(reply, offer, expiredNow)).toEqual({ kind: 'none' });
+    });
+  }
+
+  it('rejects replayed selections 1 and 2 from a consumed offer', () => {
+    expect(classifyOfferReply('1', consumed, now)).toEqual({ kind: 'consumed' });
+    expect(classifyOfferReply('2', consumed, now)).toEqual({ kind: 'consumed' });
   });
 
-  it('reports ambiguous numeric-like replies on a live offer', () => {
-    expect(classifyOfferReply('2 or 3', offer, new Date('2026-11-28T10:05:00.000Z'))).toEqual({ kind: 'ambiguous' });
+  it('offers fresh slots for genuine selections against an expired offer', () => {
+    expect(classifyOfferReply('1', offer, expiredNow)).toEqual({ kind: 'expired' });
+    expect(classifyOfferReply('option 2', offer, expiredNow)).toEqual({ kind: 'expired' });
   });
 
-  it('reports no offer when nothing was stored', () => {
-    expect(classifyOfferReply('1', null, new Date('2026-11-28T10:05:00.000Z'))).toEqual({ kind: 'none' });
+  it('asks for one unambiguous selection against a live offer', () => {
+    expect(classifyOfferReply('2 or 3', offer, now)).toEqual({ kind: 'ambiguous' });
+  });
+
+  it('never books from a bare number when no offer exists', () => {
+    expect(classifyOfferReply('1', null, now)).toEqual({ kind: 'none' });
   });
 });

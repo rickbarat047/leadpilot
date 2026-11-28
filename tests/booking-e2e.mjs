@@ -1,5 +1,7 @@
 // Safe booking integration check. Refuses any QA_BASE that is not a local server.
 // Uses seeded demo data only; never calls production, sends real messages or payments.
+import { DatabaseSync } from 'node:sqlite';
+
 const base = (process.env.QA_BASE || '').replace(/\/+$/, '');
 if (!/^http:\/\/(localhost|127\.0\.0\.1):3100$/.test(base)) {
   console.error('REFUSED: QA_BASE must be http://localhost:3100 or http://127.0.0.1:3100');
@@ -31,6 +33,66 @@ function check(name, condition, detail = '') {
     throw new Error(name);
   }
   console.log(`PASS ${name}`);
+}
+
+// Non-throwing check used by the offer-classification regressions so one RED
+// run reports every affected conversation path.
+function checkSoft(name, condition, detail = '') {
+  if (!condition) {
+    console.error(`FAIL ${name}${detail ? ` — ${detail}` : ''}`);
+    process.exitCode = 1;
+    return false;
+  }
+  console.log(`PASS ${name}`);
+  return true;
+}
+
+async function messagesFor(conversationId) {
+  const r = await req(`/api/conversations/${conversationId}/messages`);
+  return r.data?.messages || [];
+}
+
+function offerMessages(messages) {
+  return messages.filter((m) => {
+    try { return m.sender === 'ai' && JSON.parse(m.meta_json || '{}').type === 'slot_offer'; } catch { return false; }
+  });
+}
+
+function lastAiMessage(messages) {
+  return [...messages].reverse().find((m) => m.sender === 'ai');
+}
+
+// Age the newest stored offer in the local disposable SQLite DB. This only
+// touches the sandbox demo database and never contacts production.
+function expireLatestOffer(conversationId) {
+  const db = new DatabaseSync('data/leadpilot.db');
+  try {
+    const rows = db.prepare(
+      `SELECT id, meta_json FROM messages WHERE conversation_id=? AND sender='ai' AND meta_json LIKE '%slot_offer%' ORDER BY created_at DESC LIMIT 1`,
+    ).all(conversationId);
+    if (!rows.length) throw new Error(`no stored offer for ${conversationId}`);
+    const offer = JSON.parse(rows[0].meta_json);
+    offer.createdAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    db.prepare('UPDATE messages SET meta_json=? WHERE id=?').run(JSON.stringify(offer), rows[0].id);
+  } finally {
+    db.close();
+  }
+}
+
+async function assertNormalAiContinuation(conversationId, label) {
+  const before = await messagesFor(conversationId);
+  const r = await req(`/api/conversations/${conversationId}/messages`, {
+    method: 'POST',
+    body: { body: label, sender: 'lead' },
+  });
+  const after = await messagesFor(conversationId);
+  const last = lastAiMessage(after);
+  const ok = r.status === 200 && !r.data?.status && r.data?.booked !== true
+    && after.length === before.length + 2
+    && Boolean(last)
+    && !/That offer was already used|Those options expired/i.test(last?.body || '')
+    && !offerMessages(after).some((m) => !offerMessages(before).some((b) => b.id === m.id));
+  checkSoft(`${label} reaches normal AI conversation`, ok, `${JSON.stringify(r)} last=${JSON.stringify(last)}`);
 }
 
 async function createLead(name, email, service = 'Demo Service') {
@@ -174,6 +236,49 @@ check('45-minute selection booked', quickSelect.status === 200 && quickSelect.da
 appointments = await req('/api/appointments');
 const quickApt = (appointments.data?.appointments || []).find((a) => a.lead_id === quick.leadId);
 check('45-minute appointment duration', quickApt?.ends_at === new Date(new Date(quickOffer.options[0].startsAt).getTime() + 45 * 60000).toISOString(), `${quickApt?.ends_at}`);
+
+// Offer reply classification regressions: stale offer state must not capture
+// ordinary conversation, and only genuine selections may book or re-offer.
+await assertNormalAiContinuation(lead.conversationId, 'What is your business address?');
+
+const active = await createLead('QA Selection Intent', 'qa-selection@example.invalid');
+await offerFor(active.conversationId, 90);
+const ambiguous = await req(`/api/conversations/${active.conversationId}/messages`, {
+  method: 'POST',
+  body: { body: '2 or 3', sender: 'lead' },
+});
+checkSoft('ambiguous selection asks for one choice', ambiguous.status === 200 && ambiguous.data?.status === 'invalid_selection', JSON.stringify(ambiguous));
+await assertNormalAiContinuation(active.conversationId, 'I have 2 questions about pricing');
+
+const noOffer = await createLead('QA No Offer', 'qa-no-offer@example.invalid');
+const noOfferReply = await req(`/api/conversations/${noOffer.conversationId}/messages`, {
+  method: 'POST',
+  body: { body: '1', sender: 'lead' },
+});
+checkSoft('bare number without an offer never books', noOfferReply.status === 200 && !noOfferReply.data?.booked, JSON.stringify(noOfferReply));
+appointments = await req('/api/appointments');
+checkSoft('no appointment from bare number without offer', (appointments.data?.appointments || []).filter((a) => a.lead_id === noOffer.leadId).length === 0);
+
+const expired = await createLead('QA Expired Offer', 'qa-expired@example.invalid');
+await offerFor(expired.conversationId, 90);
+expireLatestOffer(expired.conversationId);
+await assertNormalAiContinuation(expired.conversationId, 'What are your working hours?');
+
+expireLatestOffer(expired.conversationId);
+const beforeExpiredOffers = offerMessages(await messagesFor(expired.conversationId)).length;
+const expiredSelect = await req(`/api/conversations/${expired.conversationId}/messages`, {
+  method: 'POST',
+  body: { body: 'option 2', sender: 'lead' },
+});
+const afterExpiredOffers = offerMessages(await messagesFor(expired.conversationId)).length;
+checkSoft(
+  'expired genuine selection offers fresh slots',
+  expiredSelect.status === 200 && expiredSelect.data?.status === 'offer_expired' && afterExpiredOffers === beforeExpiredOffers + 1,
+  `${JSON.stringify(expiredSelect)} offers ${beforeExpiredOffers}->${afterExpiredOffers}`,
+);
+
+expireLatestOffer(expired.conversationId);
+await assertNormalAiContinuation(expired.conversationId, 'yes please');
 
 if (process.exitCode) console.error('BOOKING E2E FAILED');
 else console.log('BOOKING E2E PASSED');
