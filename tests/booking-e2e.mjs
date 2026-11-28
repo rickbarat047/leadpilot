@@ -38,8 +38,10 @@ async function createLead(name, email) {
     method: 'POST',
     body: { name, email, service: 'Demo Service', source: 'manual', message: '' },
   });
-  check(`create lead ${name}`, r.status === 201 && r.data?.leadId && r.data?.conversationId, JSON.stringify(r));
-  return r.data;
+  check(`create lead ${name}`, r.status === 201 && r.data?.id, JSON.stringify(r));
+  const conv = await req('/api/conversations', { method: 'PUT', body: { leadId: r.data.id } });
+  check(`ensure conversation for ${name}`, conv.status === 200 && Boolean(conv.data?.id), JSON.stringify(conv));
+  return { leadId: r.data.id, conversationId: conv.data.id };
 }
 
 async function offerFor(conversationId) {
