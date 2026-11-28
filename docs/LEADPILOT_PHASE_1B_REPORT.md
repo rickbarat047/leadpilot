@@ -54,7 +54,7 @@ No external calls occur inside a transaction. Both paths serialize appointment c
 
 ## 5. Customer selection logic
 
-`parseSlotSelection()` deterministically accepts `1`, `2`, `3`, `option/choice/slot N`, and `first/second/third` (with optional trailing `please/one/slot/option`). It rejects ambiguous input such as `2 or 3`, out-of-range numbers and `yes` without an active offer. The messages route loads only the newest offer for that conversation, classifies it as expired or consumed before parsing the reply, and never reconstructs an offer from text or books an arbitrary mentioned time. Expired or outdated choices trigger a fresh offer and an explanation; already-consumed replies are answered without creating a duplicate; ambiguous numeric-like replies ask the customer to choose 1/2/3.
+`parseSlotSelection()` deterministically accepts `1`, `2`, `3`, `option/choice/slot N`, and `first/second/third` (with optional trailing `please/one/slot/option`). It rejects ambiguous input such as `2 or 3`, out-of-range numbers and `yes` without an active offer. `detectSelectionIntent()` now decides whether a reply is a genuine attempt to select an offered option **before** offer lifecycle state is considered: exact supported selections, explicit multi-option ambiguity, bare out-of-range digits, and option words without a number count as selection attempts; ordinary prose containing a digit does not. The messages route loads only the newest offer for that conversation and calls `classifyOfferReply()`, which checks selection intent first, then consumed/expired/active state. Ordinary questions continue through normal AI conversation regardless of whether the previous offer is active, expired or consumed. Only genuine selections against an expired/outdated offer trigger a fresh numbered offer; only genuine selections against a consumed offer are rejected as replay. Ambiguous numeric-like replies ask the customer to choose 1/2/3. The route never reconstructs an offer from text or books an arbitrary mentioned time.
 
 ## 6. Booking validation rules
 
@@ -70,7 +70,7 @@ The conversation confirmation is inserted inside the committed transaction. Noti
 
 ## 9. Tests and exact results
 
-Sandbox: `sbx_4L7bd4LFEV7TeS5AGxonyE3jea4m`, Node 24, final git revision `cf0ee3dfb749bb5b089e2df304de09688bbf0665` (review fixes). Local Windows has no Node/npm; all commands ran in the disposable sandbox. No production calls. Earlier RED evidence used revision `a730a93`.
+Final verification sandbox: `sbx_VBJ2ZEMOzPoJdnzBtdoy3vzVPF8i`, Node 24, final implementation revision `05f8e13fc25c21ccbb461640575d82956ca3ab3a` (context-sensitive offer classification). Earlier review-fix verification at `cf0ee3dfb749bb5b089e2df304de09688bbf0665` used sandbox `sbx_4L7bd4LFEV7TeS5AGxonyE3jea4m`; RED evidence used `a730a93` and `a2bfff191695a762824c5921fdbcd4a5b61bce1a`. Local Windows has no Node/npm; all commands ran in disposable sandboxes. No production calls.
 
 | Command | Exit | Result |
 |---|---|---|
@@ -78,13 +78,15 @@ Sandbox: `sbx_4L7bd4LFEV7TeS5AGxonyE3jea4m`, Node 24, final git revision `cf0ee3
 | `npx vitest run tests/booking.test.ts tests/transaction.test.ts` (RED at `85eb9fe`) | 1 | Both suites failed to load — missing modules (expected RED) |
 | `npx vitest run tests/booking.test.ts` (RED at `31677ee`) | 1 | `parseSlotOffer(JSON.stringify(offer))` returned null, 1 failed / 12 passed |
 | `npx vitest run tests/appointment-patch.test.ts tests/booking-offer-policy.test.ts tests/transaction-cleanup.test.ts tests/booking-notifications.test.ts` (RED at `a730a93`) | 1 | 4 files failed / 13 tests failed — missing modules/functions (expected RED) |
+| `npx vitest run tests/booking-offer-policy.test.ts` (RED at `a2bfff1`) | 1 | 17 tests / 8 failed — missing `detectSelectionIntent` and lifecycle applied to ordinary replies (expected RED) |
+| `QA_BASE=http://localhost:3100 npm run qa:booking` (RED at `a2bfff1`) | 1 | 3 new classification failures — consumed question, expired question, `yes please` on expired offer |
 | `npm run typecheck` | 0 | `tsc --noEmit` clean |
-| `npm test` | 0 | 14 files / **97 tests passed** |
+| `npm test` | 0 | 14 files / **101 tests passed** |
 | `npm run build` | 0 | Next 14.2.5 compiled, 58 pages |
-| `QA_BASE=http://localhost:3100 npm run qa:booking` | 0 | **60 PASS** checks |
-| `QA_BASE=http://localhost:3100 npm run qa:mobile` | 0 | 10 PASS, 0 px overflow |
+| `QA_BASE=http://localhost:3100 npm run qa:booking` | 0 | **88 PASS**, 0 fail |
+| `QA_BASE=http://localhost:3100 npm run qa:mobile` | 0 | 10 PASS, 0 fail, 0 px overflow |
 
-RED→GREEN evidence: booking-core/transaction tests were watched failing before implementation; the JSON-string offer parse regression was watched failing at `31677ee` before its fix; the four independent-review regression suites were watched failing at `a730a93` before implementation and are green at final revision. Earlier E2E failures were likewise reproduced and fixed: notes NOT NULL, undefined customer name in conflict payloads, array-as-single-parameter in `findConversationForLead()`, and wrong 409 mapping for past appointments. The E2E script refuses any `QA_BASE` other than `http://localhost:3100` or `http://127.0.0.1:3100` and uses only seeded demo data.
+RED→GREEN evidence: booking-core/transaction tests were watched failing before implementation; the JSON-string offer parse regression was watched failing at `31677ee` before its fix; the four independent-review regression suites were watched failing at `a730a93` before implementation and are green at final revision. The final classification regression was watched failing at `a2bfff1` in both the policy unit suite (8 failures) and the booking E2E (3 new failures), then green at `05f8e13` (17/17 policy tests, 101/101 unit tests, 88/88 booking checks). Earlier E2E failures were likewise reproduced and fixed: notes NOT NULL, undefined customer name in conflict payloads, array-as-single-parameter in `findConversationForLead()`, and wrong 409 mapping for past appointments. The E2E script refuses any `QA_BASE` other than `http://localhost:3100` or `http://127.0.0.1:3100` and uses only seeded demo data.
 
 ## 10. Database backends actually exercised
 
@@ -121,7 +123,17 @@ A fresh-context review of the Phase 1B branch produced four important findings; 
 3. **Transaction cleanup was untestable and leaked on begin failure.** Added injectable `src/lib/transaction-adapters.ts` and hardened `withTransaction()` so release happens even when begin throws; `tests/transaction-cleanup.test.ts` RED→GREEN.
 4. **Notification failures bypassed the isolated audit path and could duplicate alerts.** Added `src/lib/booking-notifications.ts` with isolated post-commit `recordRun()` calls and a deterministic `automation_runs` claim; `tests/booking-notifications.test.ts` RED→GREEN.
 
-E2E was extended to 60 checks, including 90/45-minute service durations, replayed option selections, concurrent selections of the same offer, the PATCH guard, and a 45-minute booking. No production calls, no merge, and no Phase 1C/1D work were performed.
+E2E was extended to 60 checks, including 90/45-minute service durations, replayed option selections, concurrent selections of the same offer, the PATCH guard, and a 45-minute booking. A subsequent final review found the classification-priority bug described in Section 15; E2E was then extended to 88 checks. No production calls, no merge, and no Phase 1C/1D work were performed.
+
+## 15. Final independent-review fix: context-sensitive offer reply classification
+
+A final independent review found that `classifyOfferReply()` checked `consumedAt`/expiry before examining the customer's reply. After a successful booking, an ordinary question such as "What is your business address?" was answered with "That offer was already used"; after expiry, an unrelated question caused fresh slots to be offered. This incorrectly gave stale offer state priority over normal conversation.
+
+The focused fix adds `detectSelectionIntent(input, offer)` to `src/lib/booking-core.ts`. It runs first and recognizes only strict, unambiguous selection attempts: exact `parseSlotSelection()` matches, explicit `2 or 3`-style ambiguity, bare out-of-range digits, and option words without a number. Ordinary prose containing a digit (for example, "I have 2 questions about pricing") is not a selection. `classifyOfferReply()` then applies lifecycle state only to genuine selection attempts: consumed offers reject replay, expired offers explain expiry and return fresh numbered options, and non-selection replies return `none` so the messages route continues the normal AI conversation. The messages route, booking transaction, replay protection and notification path were not otherwise changed.
+
+RED evidence: `a2bfff191695a762824c5921fdbcd4a5b61bce1a` — policy suite 17 tests / 8 failed; booking E2E failed on the three ordinary-reply cases. GREEN implementation: `05f8e13fc25c21ccbb461640575d82956ca3ab3a` — policy 17/17, full suite 101/101, booking E2E 88/88, mobile QA 10/10. New E2E cases cover consumed ordinary question, expired ordinary question, `yes please` on an expired offer, ambiguous `2 or 3`, a number-containing question, a bare number with no offer, expired genuine selection, and replay of consumed options 1 and 2.
+
+Implementation SHA: `05f8e13fc25c21ccbb461640575d82956ca3ab3a`. Documentation SHA: the final documentation commit at branch HEAD after this update is pushed (reported exactly in the final response and PR #2 description). PostgreSQL runtime remains unverified.
 
 ## Acceptance assessment
 

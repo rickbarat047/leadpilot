@@ -2,7 +2,7 @@
 
 ## Goal
 
-Allow a customer to accept a numbered slot offered in conversation and create exactly one appointment atomically, with conflict protection, tenant isolation, confirmation and owner notification. Include the independent-review fixes for offer consumption/replay, PATCH hardening, transaction cleanup and notification isolation. No Phase 1C work.
+Allow a customer to accept a numbered slot offered in conversation and create exactly one appointment atomically, with conflict protection, tenant isolation, confirmation and owner notification. Include the independent-review fixes for offer consumption/replay, PATCH hardening, transaction cleanup, notification isolation and context-sensitive offer reply classification. No Phase 1C work.
 
 ## Constraints
 
@@ -53,7 +53,12 @@ Added `tests/booking-e2e.mjs` and `qa:booking` npm script. It refuses non-local 
 ### Phase 8: Full verification, report and stacked PR
 **Status:** complete
 
-Fresh sandbox verification at final revision `cf0ee3dfb749bb5b089e2df304de09688bbf0665`: npm ci 0, typecheck 0, npm test 0 (14 files / 97 tests), build 0, qa:booking 0 (60 PASS), qa:mobile 0 (10 PASS). Report and planning files updated. Stacked PR #2 targeting `phase-1a-business-hours` is open and unmerged. Review fixes documented; no merge, no Phase 1C.
+Fresh sandbox verification at review-fix revision `cf0ee3dfb749bb5b089e2df304de09688bbf0665`: npm ci 0, typecheck 0, npm test 0 (14 files / 97 tests), build 0, qa:booking 0 (60 PASS), qa:mobile 0 (10 PASS). Report and planning files updated. Stacked PR #2 targeting `phase-1a-business-hours` is open and unmerged. Review fixes documented; no merge, no Phase 1C.
+
+### Phase 9: Final review fix — context-sensitive offer reply classification
+**Status:** complete
+
+Root cause: `classifyOfferReply()` checked consumed/expired state before deciding whether the reply was a slot selection, so ordinary questions after booking/expiry received replay/expiry replies and fresh offers. RED at `a2bfff191695a762824c5921fdbcd4a5b61bce1a` (policy 17 tests / 8 failed; E2E 3 new classification failures). Implemented `detectSelectionIntent()` in `src/lib/booking-core.ts` and reordered classification: selection intent → consumed → expired → accept. GREEN implementation `05f8e13fc25c21ccbb461640575d82956ca3ab3a`: typecheck 0, npm test 0 (14 files / 101 tests), build 0, qa:booking 0 (88 PASS), qa:mobile 0 (10 PASS). PostgreSQL runtime remains unverified.
 
 ## Next Step
 
