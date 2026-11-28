@@ -76,7 +76,7 @@ const PG_MIGRATIONS: string[] = [
 ];
 
 let pool: PgPool | null = null;
-async function getPool(): Promise<PgPool> {
+export async function getPool(): Promise<PgPool> {
   if (pool) return pool;
   const { Pool } = await import('pg');
   const url = config.databaseUrl;
