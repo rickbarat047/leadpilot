@@ -190,6 +190,6 @@ export async function createBooking(input: BookingInput): Promise<BookingResult>
 /** Find the conversation associated with a lead for the current business. */
 export async function findConversationForLead(businessId: string, leadId: string): Promise<string | null> {
   const { get } = await import('./db');
-  const row = await get<{ id: string }>('SELECT id FROM conversations WHERE business_id=? AND lead_id=? ORDER BY updated_at DESC LIMIT 1', [businessId, leadId]);
+  const row = await get<{ id: string }>('SELECT id FROM conversations WHERE business_id=? AND lead_id=? ORDER BY updated_at DESC LIMIT 1', businessId, leadId);
   return row?.id ?? null;
 }
