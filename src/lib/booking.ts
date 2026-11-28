@@ -117,7 +117,7 @@ export async function createBooking(input: BookingInput): Promise<BookingResult>
     if (!startsAt) return { status: 'invalid_selection' as const };
 
     const times = normalizeBookingTimes(startsAt, durationMin, new Date());
-    if (!times) return { status: 'slot_unavailable' as const };
+    if (!times) return { status: 'invalid_selection' as const };
 
     // Revalidate against current availability inside the same transaction.
     if (input.source === 'customer' && !input.ownerOverrideHours) {
