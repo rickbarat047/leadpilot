@@ -41,7 +41,7 @@ async function createLead(name, email) {
   check(`create lead ${name}`, r.status === 201 && r.data?.id, JSON.stringify(r));
   const conv = await req('/api/conversations', { method: 'PUT', body: { leadId: r.data.id } });
   check(`ensure conversation for ${name}`, conv.status === 200 && Boolean(conv.data?.id), JSON.stringify(conv));
-  return { leadId: r.data.id, conversationId: conv.data.id };
+  return { leadId: r.data.id, conversationId: conv.data.id, name, email };
 }
 
 async function offerFor(conversationId) {
