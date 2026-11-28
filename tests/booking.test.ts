@@ -5,6 +5,7 @@ import {
   isOfferedSlot,
   normalizeBookingTimes,
   overlaps,
+  parseSlotOffer,
   parseSlotSelection,
   serviceDuration,
   slotOfferExpired,
@@ -54,6 +55,10 @@ describe('deterministic slot selection', () => {
 });
 
 describe('slot offer metadata and display', () => {
+  it('parses offer metadata serialized in the database', () => {
+    expect(parseSlotOffer(JSON.stringify(offer))).toEqual(offer);
+  });
+
   it('stores exactly three numbered options with ISO starts and duration', () => {
     expect(offer.version).toBe(1);
     expect(offer.type).toBe('slot_offer');
