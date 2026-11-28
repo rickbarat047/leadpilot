@@ -33,10 +33,10 @@ function check(name, condition, detail = '') {
   console.log(`PASS ${name}`);
 }
 
-async function createLead(name, email) {
+async function createLead(name, email, service = 'Demo Service') {
   const r = await req('/api/leads', {
     method: 'POST',
-    body: { name, email, service: 'Demo Service', source: 'manual', message: '' },
+    body: { name, email, service, source: 'manual', message: '' },
   });
   check(`create lead ${name}`, r.status === 201 && r.data?.id, JSON.stringify(r));
   const conv = await req('/api/conversations', { method: 'PUT', body: { leadId: r.data.id } });
@@ -44,7 +44,7 @@ async function createLead(name, email) {
   return { leadId: r.data.id, conversationId: conv.data.id, name, email };
 }
 
-async function offerFor(conversationId) {
+async function offerFor(conversationId, expectedDuration) {
   const r = await req(`/api/conversations/${conversationId}/messages`, { method: 'POST', body: { body: 'I want to book an appointment', sender: 'lead' } });
   check('booking enquiry accepted', r.status === 200, JSON.stringify(r));
   const list = await req(`/api/conversations/${conversationId}/messages`);
@@ -53,6 +53,7 @@ async function offerFor(conversationId) {
   });
   check('numbered slot offer persisted', Boolean(offerMessage), JSON.stringify(list).slice(0, 500));
   const offer = JSON.parse(offerMessage.meta_json);
+  check('offer carries configured service duration', offer.durationMin === expectedDuration, JSON.stringify(offer));
   check('exactly three options', offer.options?.length === 3, JSON.stringify(offer));
   for (let i = 1; i <= 3; i += 1) {
     check(`option ${i} label present`, offerMessage.body.includes(`${i}. ${offer.options[i - 1].label}`), offerMessage.body);
@@ -74,11 +75,15 @@ const now = new Date();
 const days = {};
 for (const key of ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']) days[key] = { open: true, start: '10:00', end: '20:00' };
 const hours = { version: 1, timezone: 'Asia/Kolkata', status: 'configured', days };
-const put = await req('/api/business', { method: 'PUT', body: { hours } });
-check('business hours saved', put.status === 200, JSON.stringify(put));
+const services = [
+  { name: 'Demo Service', price: 1000, duration: 90 },
+  { name: 'Quick Service', price: 500, duration: 45 },
+];
+const put = await req('/api/business', { method: 'PUT', body: { hours, services } });
+check('business hours and service durations saved', put.status === 200, JSON.stringify(put));
 
 const lead = await createLead('QA Booking Customer', 'qa-customer@example.invalid');
-const offer = await offerFor(lead.conversationId);
+const offer = await offerFor(lead.conversationId, 90);
 const selected = offer.options[0];
 
 const select = await req(`/api/conversations/${lead.conversationId}/messages`, { method: 'POST', body: { body: '1', sender: 'lead' } });
@@ -118,11 +123,26 @@ const [r1, r2] = await Promise.all([c1, c2].map((c) => req('/api/appointments', 
 check('concurrent race has exactly one winner', [r1.status, r2.status].filter((s) => s === 201).length === 1, `${r1.status}/${r2.status}`);
 check('concurrent loser rejected as conflict', [r1.status, r2.status].includes(409), `${r1.status}/${r2.status}`);
 
-// Repeating the original selection must not create a duplicate appointment.
+// Repeating the original selection, or choosing another option from the same
+// consumed offer, must not create a second appointment.
 const repeat = await req(`/api/conversations/${lead.conversationId}/messages`, { method: 'POST', body: { body: '1', sender: 'lead' } });
-check('repeat selection handled', repeat.status === 200, JSON.stringify(repeat));
+check('repeat selection marked offer consumed', repeat.status === 200 && repeat.data?.status === 'offer_consumed', JSON.stringify(repeat));
+const replay = await req(`/api/conversations/${lead.conversationId}/messages`, { method: 'POST', body: { body: '2', sender: 'lead' } });
+check('different option from consumed offer rejected', replay.status === 200 && replay.data?.status === 'offer_consumed', JSON.stringify(replay));
 appointments = await req('/api/appointments');
 check('no duplicate appointment after retry', (appointments.data?.appointments || []).filter((a) => a.lead_id === lead.leadId).length === 1);
+
+// Concurrent selections of different options from one offer: one booking only.
+const raceOfferLead = await createLead('QA Offer Race', 'qa-offer-race@example.invalid');
+const raceOffer = await offerFor(raceOfferLead.conversationId, 90);
+const [o1, o2] = await Promise.all(['1', '2'].map((body) => req(`/api/conversations/${raceOfferLead.conversationId}/messages`, {
+  method: 'POST',
+  body: { body, sender: 'lead' },
+})));
+check('concurrent offer selections have exactly one booking', [o1, o2].filter((r) => r.data?.booked === true).length === 1, `${JSON.stringify(o1)} / ${JSON.stringify(o2)}`);
+check('concurrent offer loser sees consumed offer', [o1, o2].some((r) => r.data?.status === 'offer_consumed'), `${JSON.stringify(o1)} / ${JSON.stringify(o2)}`);
+appointments = await req('/api/appointments');
+check('concurrent offer creates one appointment', (appointments.data?.appointments || []).filter((a) => a.lead_id === raceOfferLead.leadId).length === 1);
 
 // Manual API validation paths.
 const overlap = await req('/api/appointments', {
@@ -135,6 +155,25 @@ const past = await req('/api/appointments', {
   body: { customer_name: 'QA Past', service: 'Demo Service', starts_at: new Date(Date.now() - 86400000).toISOString() },
 });
 check('past appointment rejected', past.status === 400, JSON.stringify(past));
+
+// PATCH cannot bypass booking conflict protection until rescheduling exists.
+const winner = (appointments.data?.appointments || []).find((a) => a.lead_id === c1.leadId || a.lead_id === c2.leadId);
+check('race winner available for PATCH guard', Boolean(winner), JSON.stringify(winner));
+const patchStart = await req(`/api/appointments/${winner.id}`, { method: 'PATCH', body: { starts_at: new Date(Date.now() + 86400000).toISOString() } });
+check('PATCH start-time change rejected', patchStart.status === 400 && patchStart.data?.error === 'start_time_change_disabled', JSON.stringify(patchStart));
+const cancel = await req(`/api/appointments/${winner.id}`, { method: 'PATCH', body: { status: 'cancelled' } });
+check('safe cancellation transition preserved', cancel.status === 200, JSON.stringify(cancel));
+const reactivate = await req(`/api/appointments/${winner.id}`, { method: 'PATCH', body: { status: 'booked' } });
+check('PATCH reactivation rejected', reactivate.status === 400 && reactivate.data?.error === 'reactivation_disabled', JSON.stringify(reactivate));
+
+// A 45-minute service must be offered and booked with its own duration.
+const quick = await createLead('QA 45 Minute Customer', 'qa-45@example.invalid', 'Quick Service');
+const quickOffer = await offerFor(quick.conversationId, 45);
+const quickSelect = await req(`/api/conversations/${quick.conversationId}/messages`, { method: 'POST', body: { body: '1', sender: 'lead' } });
+check('45-minute selection booked', quickSelect.status === 200 && quickSelect.data?.booked === true, JSON.stringify(quickSelect));
+appointments = await req('/api/appointments');
+const quickApt = (appointments.data?.appointments || []).find((a) => a.lead_id === quick.leadId);
+check('45-minute appointment duration', quickApt?.ends_at === new Date(new Date(quickOffer.options[0].startsAt).getTime() + 45 * 60000).toISOString(), `${quickApt?.ends_at}`);
 
 if (process.exitCode) console.error('BOOKING E2E FAILED');
 else console.log('BOOKING E2E PASSED');

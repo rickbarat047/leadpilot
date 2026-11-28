@@ -15,22 +15,39 @@ export interface TransactionAdapter {
 }
 
 /**
- * Run work atomically. Commit only when work resolves; always release the
- * underlying connection, including on failure.
+ * Run work atomically. Commit only when work resolves. The acquired resource is
+ * always released, even if begin() fails. Rollback/release errors never mask
+ * the original failure.
  */
 export async function withTransaction<T>(
   adapter: TransactionAdapter,
   work: (client: TransactionClient) => Promise<T>,
 ): Promise<T> {
-  const client = await adapter.begin();
+  let began = false;
+  let primaryError: unknown = null;
+  let result: T | undefined;
   try {
-    const result = await work(client);
+    const client = await adapter.begin();
+    began = true;
+    result = await work(client);
     await adapter.commit();
-    return result;
+    began = false;
   } catch (error) {
-    await adapter.rollback();
-    throw error;
+    primaryError = error;
+    if (began) {
+      try {
+        await adapter.rollback();
+      } catch {
+        // The original error is the one callers need to see.
+      }
+    }
   } finally {
-    await adapter.release();
+    try {
+      await adapter.release();
+    } catch (error) {
+      if (!primaryError) primaryError = error;
+    }
   }
+  if (primaryError !== null) throw primaryError;
+  return result as T;
 }

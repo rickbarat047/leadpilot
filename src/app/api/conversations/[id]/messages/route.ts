@@ -7,39 +7,66 @@ import { getAIProvider } from '@/lib/ai';
 import { handleInboundText, recordRun } from '@/lib/automation';
 import {
   buildSlotOffer,
+  classifyOfferReply,
   formatSlotOffers,
+  offerConsumed,
   parseSlotOffer,
-  parseSlotSelection,
+  serviceDuration,
   slotOfferExpired,
+  type SlotOffer,
 } from '@/lib/booking-core';
 import { createBooking } from '@/lib/booking';
 
 type LeadRow = { id: string; name: string; email: string; phone: string; service: string };
 
-/** Most recent still-valid slot offer stored on an AI message in this conversation. */
-async function latestSlotOffer(conversationId: string) {
+type StoredOffer = {
+  raw: string;
+  offer: SlotOffer;
+  expired: boolean;
+  consumed: boolean;
+};
+
+/** Most recent stored slot offer, with expiry/consumption kept distinct. */
+async function latestStoredOffer(conversationId: string): Promise<StoredOffer | null> {
   const row = await get<{ meta_json: string }>(
     `SELECT meta_json FROM messages WHERE conversation_id=? AND sender='ai' AND meta_json LIKE '%slot_offer%' ORDER BY created_at DESC LIMIT 1`,
     conversationId,
   );
   if (!row) return null;
   const offer = parseSlotOffer(row.meta_json);
-  return offer && !slotOfferExpired(offer, new Date()) ? { raw: row.meta_json, offer } : null;
+  if (!offer) return null;
+  return {
+    raw: row.meta_json,
+    offer,
+    expired: slotOfferExpired(offer, new Date()),
+    consumed: offerConsumed(offer),
+  };
 }
 
-/** Build and persist a fresh three-slot offer for a booking enquiry. */
+async function latestSlotOffer(conversationId: string): Promise<StoredOffer | null> {
+  const stored = await latestStoredOffer(conversationId);
+  return stored && !stored.expired && !stored.consumed ? stored : null;
+}
+
+/** Build and persist a fresh three-slot offer using the service's own duration. */
 async function offerSlots(businessId: string, lead: LeadRow | null, note: string) {
   const { freeSlotsForBusiness } = await import('@/lib/slots');
-  const top = (await freeSlotsForBusiness(businessId, { days: 7, duration: 60 })).slice(0, 3);
+  const services = await all<{ name: string; duration_min: number }>(
+    `SELECT name, duration_min FROM services WHERE business_id=?`,
+    businessId,
+  );
+  const durationMin = serviceDuration(services, lead?.service ?? null);
+  const top = (await freeSlotsForBusiness(businessId, { days: 7, duration: durationMin })).slice(0, 3);
   if (!top.length) return { body: `I don't see free slots in the next 7 days — I've flagged this for the owner.`, meta: '{}' };
   const biz = await get<{ hours_json: string }>('SELECT hours_json FROM businesses WHERE id=?', businessId);
   let timezone = 'Asia/Kolkata';
   try { timezone = JSON.parse(biz?.hours_json ?? '{}').timezone || timezone; } catch { /* keep default */ }
   const offer = buildSlotOffer({
+    id: uid('offer'),
     createdAt: nowIso(),
     timezone,
-    durationMin: 60,
-    serviceName: lead?.service || '',
+    durationMin,
+    serviceName: lead?.service || null,
     options: top.map((startsAt) => ({
       startsAt,
       label: new Date(startsAt).toLocaleString('en-IN', {
@@ -78,34 +105,50 @@ export const POST = guard(async (req: NextRequest, { params }: { params: { id: s
       const lead = await get<LeadRow>(`SELECT id, name, email, phone, service FROM leads WHERE id=? AND business_id=?`, conv.lead_id, businessId);
       if (!lead) return json({ error: 'Lead not found' }, 404);
 
-      // A reply against an outstanding slot offer is deterministic: never guess.
-      const outstanding = await latestSlotOffer(conv.id);
-      if (outstanding) {
-        const selectedIndex = parseSlotSelection(parsed.data.body, outstanding.offer);
-        if (selectedIndex) {
+      // A reply against a stored slot offer is deterministic. Expiry,
+      // consumption and duration changes are always re-checked server-side.
+      const stored = await latestStoredOffer(conv.id);
+      if (stored) {
+        const classified = classifyOfferReply(parsed.data.body, stored.offer, new Date());
+        if (classified.kind === 'accept') {
           const result = await createBooking({
             businessId,
             leadId: conv.lead_id,
             conversationId: conv.id,
             customerName: lead.name,
             service: lead.service,
-            startsAt: outstanding.offer.options.find((o) => o.index === selectedIndex)?.startsAt,
+            startsAt: stored.offer.options.find((o) => o.index === classified.index)?.startsAt,
             source: 'customer',
-            offerMeta: outstanding.raw,
-            selectedIndex,
+            offerMeta: stored.raw,
+            selectedIndex: classified.index,
           });
           if (result.status === 'created') {
             await recordRun(businessId, '', 'Customer booking', 'booking.created', conv.lead_id, [{ appointmentId: result.appointmentId }], 'ok', '');
             return json({ ok: true, booked: true, appointmentId: result.appointmentId });
           }
-          const text = result.status === 'slot_unavailable'
+          const retryNote = result.status === 'slot_unavailable'
             ? 'That slot is no longer available. Here are fresh options:'
-            : result.message ?? 'I could not complete that booking.';
-          const fresh = result.status === 'slot_unavailable' ? await offerSlots(businessId, lead, text) : null;
-          await run(`INSERT INTO messages (id, business_id, conversation_id, sender, body, meta_json) VALUES (?, ?, ?, 'ai', ?, ?)`, uid('m'), businessId, conv.id, fresh?.body ?? text, fresh?.meta ?? '{}');
+            : result.status === 'offer_outdated'
+              ? 'The service duration changed. Here are fresh options:'
+              : result.status === 'offer_consumed'
+                ? 'That offer was already used. Please start a new booking enquiry.'
+                : result.message ?? 'I could not complete that booking.';
+          const fresh = result.status === 'slot_unavailable' || result.status === 'offer_outdated'
+            ? await offerSlots(businessId, lead, retryNote)
+            : null;
+          await run(`INSERT INTO messages (id, business_id, conversation_id, sender, body, meta_json) VALUES (?, ?, ?, 'ai', ?, ?)`, uid('m'), businessId, conv.id, fresh?.body ?? retryNote, fresh?.meta ?? '{}');
           return json({ ok: false, status: result.status });
         }
-        if (/^(1|2|3|option|choice|slot|first|second|third)/i.test(parsed.data.body.trim())) {
+        if (classified.kind === 'expired') {
+          const fresh = await offerSlots(businessId, lead, 'Those options expired. Here are fresh options:');
+          await run(`INSERT INTO messages (id, business_id, conversation_id, sender, body, meta_json) VALUES (?, ?, ?, 'ai', ?, ?)`, uid('m'), businessId, conv.id, fresh.body, fresh.meta);
+          return json({ ok: false, status: 'offer_expired' });
+        }
+        if (classified.kind === 'consumed') {
+          await run(`INSERT INTO messages (id, business_id, conversation_id, sender, body) VALUES (?, ?, ?, 'ai', ?)`, uid('m'), businessId, conv.id, 'That offer was already used. Please start a new booking enquiry.');
+          return json({ ok: false, status: 'offer_consumed' });
+        }
+        if (classified.kind === 'ambiguous') {
           await run(`INSERT INTO messages (id, business_id, conversation_id, sender, body) VALUES (?, ?, ?, 'ai', ?)`, uid('m'), businessId, conv.id, 'Please reply with one option number: 1, 2 or 3.');
           return json({ ok: false, status: 'invalid_selection' });
         }

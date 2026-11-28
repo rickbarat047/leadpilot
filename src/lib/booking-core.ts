@@ -3,6 +3,8 @@
 
 export type SlotOfferOption = { index: number; startsAt: string; label: string };
 export type SlotOffer = {
+  /** Stable identity so a consumed offer cannot be replayed with another option. */
+  id: string;
   version: 1;
   type: 'slot_offer';
   createdAt: string;
@@ -10,9 +12,12 @@ export type SlotOffer = {
   durationMin: number;
   serviceName: string | null;
   options: SlotOfferOption[];
+  consumedAt?: string | null;
+  consumedBy?: string | null;
 };
 
 export type BuildSlotOfferInput = {
+  id?: string;
   createdAt: string;
   timezone: string;
   durationMin: number;
@@ -25,6 +30,7 @@ const DEFAULT_DURATION_MIN = 60;
 
 export function buildSlotOffer(input: BuildSlotOfferInput): SlotOffer {
   return {
+    id: input.id || `offer_${input.createdAt}_${input.options[0]?.startsAt ?? 'none'}`,
     version: 1,
     type: 'slot_offer',
     createdAt: input.createdAt,
@@ -42,6 +48,7 @@ export function parseSlotOffer(value: unknown): SlotOffer | null {
   }
   if (!value || typeof value !== 'object') return null;
   const v = value as Record<string, unknown>;
+  if (typeof v.id !== 'string' || !v.id) return null;
   if (v.version !== 1 || v.type !== 'slot_offer') return null;
   if (typeof v.createdAt !== 'string' || typeof v.timezone !== 'string') return null;
   if (typeof v.durationMin !== 'number' || !Number.isFinite(v.durationMin)) return null;
@@ -56,6 +63,7 @@ export function parseSlotOffer(value: unknown): SlotOffer | null {
   }
   if (!options.length) return null;
   return {
+    id: v.id,
     version: 1,
     type: 'slot_offer',
     createdAt: v.createdAt,
@@ -63,7 +71,37 @@ export function parseSlotOffer(value: unknown): SlotOffer | null {
     durationMin: v.durationMin,
     serviceName: typeof v.serviceName === 'string' ? v.serviceName : null,
     options,
+    consumedAt: typeof v.consumedAt === 'string' ? v.consumedAt : null,
+    consumedBy: typeof v.consumedBy === 'string' ? v.consumedBy : null,
   };
+}
+
+export function offerConsumed(offer: SlotOffer | null): boolean {
+  return !!offer && typeof offer.consumedAt === 'string' && offer.consumedAt.length > 0;
+}
+
+export function offerDurationMatches(offer: SlotOffer | null, durationMin: number): boolean {
+  return !!offer && offer.durationMin === durationMin;
+}
+
+/**
+ * Classify a customer reply against the stored offer. Expiry and consumption
+ * are checked before the reply text so an old "1" can never be accepted.
+ */
+export function classifyOfferReply(
+  input: unknown,
+  offer: SlotOffer | null,
+  now: Date,
+): { kind: 'accept'; index: number } | { kind: 'expired' | 'consumed' | 'ambiguous' | 'none' } {
+  if (!offer) return { kind: 'none' };
+  if (offerConsumed(offer)) return { kind: 'consumed' };
+  if (slotOfferExpired(offer, now)) return { kind: 'expired' };
+  const index = parseSlotSelection(input, offer);
+  if (index) return { kind: 'accept', index };
+  if (typeof input === 'string' && /^(1|2|3|option|choice|slot|first|second|third)/i.test(input.trim())) {
+    return { kind: 'ambiguous' };
+  }
+  return { kind: 'none' };
 }
 
 /** Numbered choices come from stored metadata, never from reparsing conversation text. */

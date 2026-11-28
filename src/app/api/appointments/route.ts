@@ -46,7 +46,8 @@ export const POST = guard(async (req: NextRequest) => {
   });
 
   const status = result.status === 'created' ? 201
-    : result.status === 'slot_unavailable' || result.status === 'already_booked' ? 409
+    : result.status === 'slot_unavailable' || result.status === 'already_booked'
+      || result.status === 'offer_consumed' || result.status === 'offer_outdated' ? 409
     : result.status === 'lead_not_found' || result.status === 'business_not_found' ? 404
     : 400;
   return json({

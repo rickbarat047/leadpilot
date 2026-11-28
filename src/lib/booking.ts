@@ -5,14 +5,17 @@ import { normalizeBusinessHours } from './business-hours';
 import {
   isOfferedSlot,
   normalizeBookingTimes,
+  offerConsumed,
+  offerDurationMatches,
   overlaps,
   parseSlotOffer,
   serviceDuration,
   slotOfferExpired,
 } from './booking-core';
+import { notifyBookingPartiesForBooking } from './booking-notifications';
 import { bookingTransaction, lockBusiness } from './db-transaction';
 import { nowIso, uid } from './ids';
-import { emailOn, isValidEmail, notifyOwner, queueEmail } from './messaging';
+import { isValidEmail } from './messaging';
 import { generateSlots } from './slots';
 import { withTransaction, type TransactionClient } from './transaction';
 
@@ -21,6 +24,8 @@ export type BookingOutcome =
   | 'already_booked'
   | 'slot_unavailable'
   | 'invalid_selection'
+  | 'offer_consumed'
+  | 'offer_outdated'
   | 'lead_not_found'
   | 'business_not_found';
 
@@ -103,13 +108,34 @@ export async function createBooking(input: BookingInput): Promise<BookingResult>
       : [];
     const durationMin = serviceDuration(serviceRows, serviceName);
 
-    const offer = parseSlotOffer(input.offerMeta);
+    const submittedOffer = parseSlotOffer(input.offerMeta);
+    let activeOffer = submittedOffer;
+    let offerRowId: string | null = null;
     let startsAt = input.startsAt ?? null;
     if (input.source === 'customer') {
-      if (!offer || input.selectedIndex == null) return { status: 'invalid_selection' as const };
-      if (slotOfferExpired(offer, new Date())) return { status: 'slot_unavailable' as const };
-      const option = offer.options.find((o) => o.index === input.selectedIndex);
-      if (!option || !isOfferedSlot(offer, input.selectedIndex, option.startsAt)) {
+      if (!submittedOffer || !input.conversationId || input.selectedIndex == null) {
+        return { status: 'invalid_selection' as const };
+      }
+      // Read the authoritative stored copy inside the transaction so a stale
+      // client payload cannot replay a consumed or outdated offer.
+      const offerRows = await tx.query<Row>(
+        `SELECT id, meta_json FROM messages WHERE conversation_id=? AND sender='ai' AND meta_json LIKE '%slot_offer%' ORDER BY created_at DESC`,
+        [input.conversationId],
+      );
+      for (const row of offerRows) {
+        const candidate = parseSlotOffer(row.meta_json);
+        if (candidate?.id === submittedOffer.id) {
+          activeOffer = candidate;
+          offerRowId = String(row.id);
+          break;
+        }
+      }
+      if (!offerRowId || !activeOffer) return { status: 'invalid_selection' as const };
+      if (offerConsumed(activeOffer)) return { status: 'offer_consumed' as const };
+      if (!offerDurationMatches(activeOffer, durationMin)) return { status: 'offer_outdated' as const };
+      if (slotOfferExpired(activeOffer, new Date())) return { status: 'slot_unavailable' as const };
+      const option = activeOffer.options.find((o) => o.index === input.selectedIndex);
+      if (!option || !isOfferedSlot(activeOffer, input.selectedIndex, option.startsAt)) {
         return { status: 'invalid_selection' as const };
       }
       startsAt = option.startsAt;
@@ -165,6 +191,10 @@ export async function createBooking(input: BookingInput): Promise<BookingResult>
         [uid('msg'), input.businessId, input.conversationId, 'ai', confirmation, JSON.stringify({ type: 'booking_confirmation', appointmentId }), nowIso()],
       );
     }
+    if (offerRowId && activeOffer) {
+      const consumed = JSON.stringify({ ...activeOffer, consumedAt: nowIso(), consumedBy: appointmentId });
+      await tx.query('UPDATE messages SET meta_json=? WHERE id=? AND business_id=?', [consumed, offerRowId, input.businessId]);
+    }
 
     ownerBody = `New booking: ${input.customerName} — ${serviceName || 'General'} — ${displayTime(times.startsAt, timezone)}.`;
     customerEmail = lead && isValidEmail(String(lead.email ?? '')) ? String(lead.email) : null;
@@ -174,11 +204,14 @@ export async function createBooking(input: BookingInput): Promise<BookingResult>
 
   if (result.status === 'created' && result.appointmentId) {
     try {
-      if (customerEmail && emailOn(settingsJson, 'emailBookingConfirm')) {
-        const sent = await queueEmail(input.businessId, customerEmail, 'Your appointment is confirmed', confirmation);
-        if (!sent.ok) console.error('[booking] confirmation email failed', sent.error ?? 'unknown');
-      }
-      await notifyOwner(input.businessId, 'New appointment booked', ownerBody);
+      await notifyBookingPartiesForBooking({
+        businessId: input.businessId,
+        appointmentId: result.appointmentId,
+        customerEmail,
+        settingsJson,
+        confirmation,
+        ownerBody,
+      });
     } catch (e) {
       // A notification failure must never roll back a committed appointment.
       console.error('[booking] notification failure', e instanceof Error ? e.message : e);
