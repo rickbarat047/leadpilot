@@ -4,7 +4,7 @@
 import { emailOn, isValidEmail, notifyOwner, queueEmail } from './messaging';
 import { recordRun } from './runs';
 import { nowIso } from './ids';
-import { run } from './db';
+import { get } from './db';
 
 export type NotificationKind = 'customer' | 'owner';
 export type NotificationResult = { ok: boolean; mock?: boolean; id?: string; error?: string };
@@ -58,12 +58,12 @@ export async function notifyBookingPartiesForBooking(input: {
 }): Promise<void> {
   const claim = async (kind: NotificationKind): Promise<boolean> => {
     const id = `notif_${input.appointmentId}_${kind}`;
-    const changes = await run(
-      `INSERT INTO automation_runs (id, business_id, automation_id, automation_name, trigger, lead_id, steps_json, status, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'claimed', '', ?) ON CONFLICT(id) DO NOTHING`,
+    const claimed = await get<{ id: string }>(
+      `INSERT INTO automation_runs (id, business_id, automation_id, automation_name, trigger, lead_id, steps_json, status, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'claimed', '', ?) ON CONFLICT(id) DO NOTHING RETURNING id`,
       id, input.businessId, '', `Booking notification (${kind})`, `booking.notification.${kind}`, '',
       JSON.stringify([{ appointmentId: input.appointmentId }]), nowIso(),
     );
-    return Number(changes) > 0;
+    return Boolean(claimed?.id);
   };
 
   const record = async (kind: NotificationKind, status: NotificationStatus, error: string) => {

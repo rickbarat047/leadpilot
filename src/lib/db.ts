@@ -167,14 +167,13 @@ export async function get<T = Row>(sqlText: string, ...params: unknown[]): Promi
   return rows[0];
 }
 
-export async function run(sqlText: string, ...params: unknown[]): Promise<number> {
+export async function run(sqlText: string, ...params: unknown[]): Promise<void> {
   if (isPostgres()) {
-    const res = await (await getPool()).query(toPgPlaceholders(sqlText), params as unknown[]);
-    return Number(res.rowCount ?? 0);
+    await (await getPool()).query(toPgPlaceholders(sqlText), params as unknown[]);
+    return;
   }
   const d = await getSqlite();
-  const info = d.prepare(sqlText).run(...(params as []));
-  return Number(info.changes ?? 0);
+  d.prepare(sqlText).run(...(params as []));
 }
 
 /** Never throws — observability must not break product flows. */

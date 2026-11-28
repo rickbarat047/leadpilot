@@ -18,7 +18,7 @@ function deps(overrides: Partial<NotificationDeps> = {}) {
 describe('booking notification isolation', () => {
   it('attempts owner notification even when customer email fails', async () => {
     const { deps: d, calls } = deps({
-      sendCustomer: async () => { throw new Error('email provider down'); },
+      sendCustomer: async () => { calls.push('customer'); throw new Error('email provider down'); },
     });
     await notifyBookingParties('apt_1', d);
     expect(calls).toContain('customer');
@@ -28,7 +28,7 @@ describe('booking notification isolation', () => {
 
   it('keeps a successful customer confirmation when owner notification fails', async () => {
     const { deps: d, calls } = deps({
-      sendOwner: async () => { throw new Error('owner lookup failed'); },
+      sendOwner: async () => { calls.push('owner'); throw new Error('owner lookup failed'); },
     });
     await notifyBookingParties('apt_1', d);
     expect(calls).toContain('customer');

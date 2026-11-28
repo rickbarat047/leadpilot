@@ -62,7 +62,7 @@ export function parseSlotOffer(value: unknown): SlotOffer | null {
     options.push({ index: i + 1, startsAt: o.startsAt, label: o.label });
   }
   if (!options.length) return null;
-  return {
+  const parsed: SlotOffer = {
     id: v.id,
     version: 1,
     type: 'slot_offer',
@@ -71,9 +71,10 @@ export function parseSlotOffer(value: unknown): SlotOffer | null {
     durationMin: v.durationMin,
     serviceName: typeof v.serviceName === 'string' ? v.serviceName : null,
     options,
-    consumedAt: typeof v.consumedAt === 'string' ? v.consumedAt : null,
-    consumedBy: typeof v.consumedBy === 'string' ? v.consumedBy : null,
   };
+  if (typeof v.consumedAt === 'string') parsed.consumedAt = v.consumedAt;
+  if (typeof v.consumedBy === 'string') parsed.consumedBy = v.consumedBy;
+  return parsed;
 }
 
 export function offerConsumed(offer: SlotOffer | null): boolean {
