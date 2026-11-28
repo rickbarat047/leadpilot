@@ -27,7 +27,7 @@ export function bookingTransaction(): TransactionAdapter {
     let began = false;
     return {
       async begin(): Promise<TransactionClient> {
-        const c = await getPool().connect();
+        const c = await (await getPool()).connect();
         client = c;
         await c.query('BEGIN');
         began = true;
