@@ -31,7 +31,7 @@ async function latestSlotOffer(conversationId: string) {
 async function offerSlots(businessId: string, lead: LeadRow | null, note: string) {
   const { freeSlotsForBusiness } = await import('@/lib/slots');
   const top = (await freeSlotsForBusiness(businessId, { days: 7, duration: 60 })).slice(0, 3);
-  if (!top.length) return `I don't see free slots in the next 7 days — I've flagged this for the owner.`;
+  if (!top.length) return { body: `I don't see free slots in the next 7 days — I've flagged this for the owner.`, meta: '{}' };
   const biz = await get<{ hours_json: string }>('SELECT hours_json FROM businesses WHERE id=?', businessId);
   let timezone = 'Asia/Kolkata';
   try { timezone = JSON.parse(biz?.hours_json ?? '{}').timezone || timezone; } catch { /* keep default */ }
@@ -47,7 +47,7 @@ async function offerSlots(businessId: string, lead: LeadRow | null, note: string
       }),
     })),
   });
-  return `${note}\n${formatSlotOffers(offer)}\nReply with 1, 2 or 3 to confirm.`;
+  return { body: `${note}\n${formatSlotOffers(offer)}\nReply with 1, 2 or 3 to confirm.`, meta: JSON.stringify(offer) };
 }
 
 export const GET = guard(async (req: NextRequest, { params }: { params: { id: string } }) => {
@@ -101,8 +101,8 @@ export const POST = guard(async (req: NextRequest, { params }: { params: { id: s
           const text = result.status === 'slot_unavailable'
             ? 'That slot is no longer available. Here are fresh options:'
             : result.message ?? 'I could not complete that booking.';
-          const reply = result.status === 'slot_unavailable' ? await offerSlots(businessId, lead, text) : text;
-          await run(`INSERT INTO messages (id, business_id, conversation_id, sender, body) VALUES (?, ?, ?, 'ai', ?)`, uid('m'), businessId, conv.id, reply);
+          const fresh = result.status === 'slot_unavailable' ? await offerSlots(businessId, lead, text) : null;
+          await run(`INSERT INTO messages (id, business_id, conversation_id, sender, body, meta_json) VALUES (?, ?, ?, 'ai', ?, ?)`, uid('m'), businessId, conv.id, fresh?.body ?? text, fresh?.meta ?? '{}');
           return json({ ok: false, status: result.status });
         }
         if (/^(1|2|3|option|choice|slot|first|second|third)/i.test(parsed.data.body.trim())) {
