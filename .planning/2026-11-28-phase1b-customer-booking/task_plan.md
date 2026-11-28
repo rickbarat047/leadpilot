@@ -2,7 +2,7 @@
 
 ## Goal
 
-Allow a customer to accept a numbered slot offered in conversation and create exactly one appointment atomically, with conflict protection, tenant isolation, confirmation and owner notification. No Phase 1C work.
+Allow a customer to accept a numbered slot offered in conversation and create exactly one appointment atomically, with conflict protection, tenant isolation, confirmation and owner notification. Include the independent-review fixes for offer consumption/replay, PATCH hardening, transaction cleanup and notification isolation. No Phase 1C work.
 
 ## Constraints
 
@@ -11,50 +11,50 @@ Allow a customer to accept a numbered slot offered in conversation and create ex
 - No production DB/env/Vercel changes; no real email/WhatsApp/payment calls.
 - No reschedule/cancel, webhook security, AI provider, billing, calendar or redesign work.
 - Verification via disposable Vercel Sandbox (local Windows has no Node/npm).
-- PostgreSQL runtime remains unverified unless disposable credentials are provided.
+- PostgreSQL runtime remains unverified; no SQL-string substitution for real DB checks.
 
 ## Phases
 
 ### Phase 1: RED tests for slot offers, selection and booking outcomes
-**Status:** in_progress
+**Status:** complete
 
-Write failing tests for numbered offer metadata, deterministic selection (1/2/3, option/first/second/third), ambiguous/stale/unoffered/yes-without-offer cases, created/already_booked/slot_unavailable/invalid_selection/lead_not_found/business_not_found results, lead/conversation updates, overlap/cancelled-release/concurrency/duplicate/past/zero/negative duration, tenant isolation. Run and record RED.
+Wrote `tests/booking.test.ts` and `tests/transaction.test.ts`; watched them fail in sandbox because modules were missing. Covered numbered offer metadata, deterministic selection, ambiguous/stale/unoffered cases, booking outcomes, overlap/concurrency/duplicate/past/invalid durations and transaction commit/rollback/release.
 
 ### Phase 2: Transaction abstraction for SQLite and PostgreSQL
-**Status:** pending
+**Status:** complete
 
-Add strongly typed `withTransaction` using SQLite `BEGIN IMMEDIATE` on a dedicated connection with busy timeout, and PostgreSQL pooled client with `SELECT ... FOR UPDATE` business lock. All reads/writes in one client; commit/rollback/release guaranteed; no external calls inside transactions.
+Added `src/lib/transaction.ts` (withTransaction with guaranteed release, including begin failure), injectable `src/lib/transaction-adapters.ts`, and `src/lib/db-transaction.ts` using SQLite dedicated `DatabaseSync` with `BEGIN IMMEDIATE`/busy timeout and PostgreSQL dedicated pooled client with `SELECT ... FOR UPDATE`. Exported `getPool()` from `src/lib/db.ts`.
 
 ### Phase 3: Central booking service
-**Status:** pending
+**Status:** complete
 
-Create `src/lib/booking.ts` with validated business/lead/time/duration, service duration from `services.duration_min`, in-transaction availability revalidation, overlap query, duplicate detection, insert, lead update, conversation confirmation, and structured outcome mapping.
+Created `src/lib/booking-core.ts` and `src/lib/booking.ts::createBooking()` with validated business/lead/time/duration, service duration from `services.duration_min`, in-transaction availability revalidation, overlap/duplicate detection, atomic offer consumption, insert, lead update, conversation confirmation, and structured outcome mapping including `offer_outdated`/`offer_consumed`.
 
 ### Phase 4: Persist slot offers and deterministic selection in messages route
-**Status:** pending
+**Status:** complete
 
-Store numbered offers with exact ISO starts/duration/service/label/version/createdAt in `messages.meta_json`; replace weak intent regex selection with last-valid-offer parsing; regenerate fresh offers for stale choices; ask for clarification when ambiguous.
+Stored numbered `SlotOffer` JSON (with stable id, createdAt, timezone, duration, service and consumed markers) in `messages.meta_json`; exposed meta_json through GET messages; replaced weak intent regex selection with last-offer parsing; JSON-string metadata parsing regression fixed; expired/outdated/consumed/ambiguous replies handled distinctly; service-specific durations used for offers.
 
 ### Phase 5: Route all appointment creation through booking service
-**Status:** pending
+**Status:** complete
 
-Rewrite manual `POST /api/appointments` to use the service while preserving owner capability; harden `PATCH /api/appointments/[id]` scoping/status handling; ensure no other direct INSERT paths bypass the service.
+Rewrote manual `POST /api/appointments` through `createBooking({source:'manual',ownerOverrideHours:true})` with outcome mapping and no direct INSERT. Hardened `PATCH /api/appointments/[id]` with `src/lib/appointment-patch.ts`: tenant-scoped update, rejects `starts_at` changes and reactivation of cancelled/no-show bookings.
 
 ### Phase 6: Post-commit confirmations and owner notification
-**Status:** pending
+**Status:** complete
 
-Queue customer email only after commit when configured; insert confirmation message in the transaction; notify owner after commit through existing infrastructure; no duplicate notifications on retries; record failures via run logs without rolling back.
+Added `src/lib/booking-notifications.ts`: isolated post-commit `recordRun()` calls and deterministic `automation_runs` claim via `INSERT ... ON CONFLICT DO NOTHING RETURNING id`. Customer email queued only when configured and after commit; owner notification gated by existing settings; failures logged without rollback or duplicate alerts.
 
 ### Phase 7: Safe local integration/concurrency test script
-**Status:** pending
+**Status:** complete
 
-Create integration script that refuses non-local QA_BASE, uses only seeded demo data, verifies the 14 journey checks including conflict, concurrent attempts and duplicate retries, plus manual API conflict path. Run it locally in sandbox only.
+Added `tests/booking-e2e.mjs` and `qa:booking` npm script. It refuses non-local QA_BASE, uses seeded demo data, and verifies 60 checks including offer persistence, numbered selection, 90/45-minute services, exact appointment times, lead/conversation updates, conflicts, replayed selections, concurrent selections of one offer, duplicate retries, PATCH guard, manual API conflicts and past appointment rejection.
 
 ### Phase 8: Full verification, report and stacked PR
-**Status:** pending
+**Status:** complete
 
-Run new tests, full suite, typecheck, build, mobile QA, integration/concurrency script; write `docs/LEADPILOT_PHASE_1B_REPORT.md`; update planning; inspect diff; commit/push branch; open stacked PR targeting `phase-1a-business-hours`; stop for review.
+Fresh sandbox verification at final revision `cf0ee3dfb749bb5b089e2df304de09688bbf0665`: npm ci 0, typecheck 0, npm test 0 (14 files / 97 tests), build 0, qa:booking 0 (60 PASS), qa:mobile 0 (10 PASS). Report and planning files updated. Stacked PR #2 targeting `phase-1a-business-hours` is open and unmerged. Review fixes documented; no merge, no Phase 1C.
 
 ## Next Step
 
-Write and run the Phase 1B RED tests before any implementation.
+Stop and present the final Phase 1B review-fix results for the user's review. Do not start Phase 1C or merge any PR.

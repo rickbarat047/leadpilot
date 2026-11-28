@@ -1,58 +1,98 @@
-# Progress Log
+# Progress Log — Phase 1B
 
-Use this file as the chronological record of work performed, files changed, validation results, and errors.
+## Session: 2026-11-28 — Phase 1B implementation
 
-## Session: [DATE]
+### Phase 1: RED tests
+- **Status:** complete
+- Created `tests/booking.test.ts`, `tests/transaction.test.ts`; watched RED in sandbox (`85eb9fe`).
 
-Replace `[DATE]` with the date of this work session.
+### Phase 2: Transaction abstraction
+- **Status:** complete
+- Added `transaction.ts`, `transaction-adapters.ts`, `db-transaction.ts`; exported `getPool()`; fixed async connect.
 
-### Phase 1: [Title]
+### Phase 3: Booking service
+- **Status:** complete
+- Added `booking-core.ts`, `booking.ts`; fixed notes null, serialized offer parsing, conversation lookup params, past-time mapping.
 
-- **Status:** in_progress
-- **Started:** [timestamp]
-- Actions taken:
-  -
-- Files created/modified:
-  -
+### Phase 4: Messages route offers
+- **Status:** complete
+- Persisted offer meta, exposed `meta_json`, wired deterministic selection and re-offers.
 
-Use the same status values as `task_plan.md`: `pending`, `in_progress`, or `complete`. Add concrete actions and paths as the phase advances.
+### Phase 5: Appointment API
+- **Status:** complete
+- Manual POST through booking service; PATCH hardened later in review fixes.
 
-### Phase 2: [Title]
+### Phase 6: Notifications
+- **Status:** complete
+- Post-commit email/owner notifications; later isolated with deterministic claim.
 
-- **Status:** pending
-- Actions taken:
-  -
-- Files created/modified:
-  -
+### Phase 7: Local E2E
+- **Status:** complete
+- Added `tests/booking-e2e.mjs` + `qa:booking`; fixed lead/conversation resolution and conflict payloads; reached 31 PASS before review fixes.
+
+### Phase 8: Verification, report, stacked PR
+- **Status:** complete
+- Wrote `docs/LEADPILOT_PHASE_1B_REPORT.md`; pushed branch; opened PR #2 targeting `phase-1a-business-hours`; stopped for review.
+
+## Session: 2026-11-28 — Independent review fixes
+
+### Review RED
+- **Status:** complete
+- Wrote `tests/appointment-patch.test.ts`, `tests/booking-offer-policy.test.ts`, `tests/transaction-cleanup.test.ts`, `tests/booking-notifications.test.ts`; committed `a730a93`; RED: 4 files failed / 13 tests failed for missing modules/functions.
+
+### Review implementation
+- **Status:** complete
+- Added `src/lib/appointment-patch.ts`, `src/lib/transaction-adapters.ts`, `src/lib/booking-notifications.ts`; hardened `src/lib/transaction.ts`; extended `src/lib/booking-core.ts` and `src/lib/booking.ts`; wired messages/appointments routes; extended E2E to 60 checks.
+- Commits: `6ada80a` (implementation), `cf0ee3d` (typecheck/test fixes).
+
+### Review verification
+- **Status:** complete
+- Fresh sandbox `sbx_4L7bd4LFEV7TeS5AGxonyE3jea4m` at `cf0ee3dfb749bb5b089e2df304de09688bbf0665`.
 
 ## Test Results
 
-Record each validation command or scenario, its expected result, and the observed outcome.
-
 | Test | Input | Expected | Actual | Status |
 |------|-------|----------|--------|--------|
-|      |       |          |        |        |
+| `npm ci --no-audit --no-fund` | sandbox | exit 0 | exit 0 | pass |
+| `npx vitest run tests/booking.test.ts tests/transaction.test.ts` | `85eb9fe` | RED | failed to load, 0 collected | pass (RED) |
+| `npx vitest run tests/booking.test.ts` | `31677ee` | RED for JSON-string offer | 1 failed / 12 passed | pass (RED) |
+| 4 review suites | `a730a93` | RED | 4 files failed / 13 tests failed | pass (RED) |
+| `npm run typecheck` | final | exit 0 | exit 0 | pass |
+| `npm test` | final | all green | 14 files / 97 tests passed | pass |
+| `npm run build` | final | exit 0 | exit 0, 58 pages | pass |
+| `QA_BASE=http://localhost:3100 npm run qa:booking` | final | all checks | 60 PASS | pass |
+| `QA_BASE=http://localhost:3100 npm run qa:mobile` | final | all checks | 10 PASS, 0 px overflow | pass |
+| PostgreSQL runtime check | sandbox | verify if possible | no env names/binaries; unverified | documented |
 
 ## Error Log
 
-Record errors promptly, including the attempt number and resolution. Change the approach before retrying a failed action.
-
 | Timestamp | Error | Attempt | Resolution |
 |-----------|-------|---------|------------|
-|           |       | 1       |            |
+| 2026-11-28 | RED suites failed to load | 1 | Expected; implemented modules |
+| 2026-11-28 | `getPool` not exported / connect misuse | 1 | Exported and awaited getPool |
+| 2026-11-28 | `NOT NULL appointments.notes` | 1 | Use `''` |
+| 2026-11-28 | Offer metadata never parsed | 1 | JSON.parse string metadata; RED at `31677ee` |
+| 2026-11-28 | E2E lead shape mismatch | 1 | Resolve conversation via `PUT /api/conversations` |
+| 2026-11-28 | `Unknown named parameter '0'` | 1 | Positional params in conversation lookup |
+| 2026-11-28 | Past appointment 409 | 1 | Map to `invalid_selection` (400) |
+| 2026-11-28 | Stale server / EADDRINUSE | 2 | Kill next-server by PID; never `pkill -f 'next start'` |
+| 2026-11-28 | Review suites RED | 1 | Expected; implemented four fix sets |
+| 2026-11-28 | PostgreSQL unavailable | 1 | Documented as unverified |
+
+## Commit Chain (review fixes)
+
+`a730a93` (RED) → `6ada80a` (implementation) → `cf0ee3d` (typecheck/test fixes). Docs/planning update pending on branch after this log.
 
 ## 5-Question Reboot Check
 
-Use this table when resuming to confirm the current phase, destination, goal, findings, and completed work.
-
 | Question | Answer |
 |----------|--------|
-| Where am I? | Phase X |
-| Where am I going? | Remaining phases |
-| What's the goal? | [goal statement] |
+| Where am I? | Phase 1B complete, review fixes verified |
+| Where am I going? | Stop for user review; no Phase 1C |
+| What's the goal? | Atomic customer booking with conflict protection and review fixes |
 | What have I learned? | See findings.md |
-| What have I done? | See above |
+| What have I done? | 97 unit tests, 60 E2E checks, 10 mobile checks green; PR #2 open |
 
 ---
 
-*Update this file after completing a phase, running validation, or encountering an error.*
+*No Phase 1C/1D started; no merge performed.*
