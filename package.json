@@ -12,7 +12,8 @@
     "start": "next start -p 3100",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "qa:mobile": "node ./tests/mobile-qa.mjs"
+    "qa:mobile": "node ./tests/mobile-qa.mjs",
+    "qa:booking": "node ./tests/booking-e2e.mjs"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
