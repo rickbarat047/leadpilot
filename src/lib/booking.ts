@@ -151,7 +151,7 @@ export async function createBooking(input: BookingInput): Promise<BookingResult>
     const appointmentId = uid('apt');
     await tx.query(
       'INSERT INTO appointments (id, business_id, lead_id, customer_name, service, starts_at, ends_at, status, source, notes, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-      [appointmentId, input.businessId, input.leadId ?? null, input.customerName, serviceName || 'General', times.startsAt, times.endsAt, 'booked', input.source ?? 'manual', null, nowIso()],
+      [appointmentId, input.businessId, input.leadId ?? null, input.customerName, serviceName || 'General', times.startsAt, times.endsAt, 'booked', input.source ?? 'manual', '', nowIso()],
     );
 
     if (input.leadId) {
