@@ -85,9 +85,43 @@ export function offerDurationMatches(offer: SlotOffer | null, durationMin: numbe
   return !!offer && offer.durationMin === durationMin;
 }
 
+export type SelectionIntent =
+  | { kind: 'selection'; index: number }
+  | { kind: 'ambiguous' }
+  | { kind: 'none' };
+
 /**
- * Classify a customer reply against the stored offer. Expiry and consumption
- * are checked before the reply text so an old "1" can never be accepted.
+ * Decide whether a reply is genuinely trying to pick an offered option.
+ * This is deliberately strict: only exact supported selections, explicit
+ * multi-option choices, and bare out-of-range numbers count. Ordinary prose
+ * that happens to contain a digit must stay in the normal AI conversation.
+ */
+export function detectSelectionIntent(input: unknown, offer: SlotOffer | null): SelectionIntent {
+  if (!offer || typeof input !== 'string') return { kind: 'none' };
+  const text = input.trim().toLowerCase().replace(/[.!]+$/, '');
+  if (!text) return { kind: 'none' };
+
+  const index = parseSlotSelection(input, offer);
+  if (index !== null) return { kind: 'selection', index };
+
+  const numericTokens = text.match(/\d+/g) ?? [];
+  const startsWithChoice = /^(?:\d+|option|choice|slot|first|second|third)\b/.test(text);
+  const hasChoiceWord = /\b(?:option|choice|slot|first|second|third)\b/.test(text);
+  const hasChoiceJoiner = /\b(?:or|and)\b/.test(text) || /[,/]/.test(text);
+
+  // "2 or 3", "option 2 or 3", "1 and 2" are real but ambiguous attempts.
+  if (startsWithChoice && (numericTokens.length >= 2 || (hasChoiceWord && hasChoiceJoiner))) {
+    return { kind: 'ambiguous' };
+  }
+  if (/^\d+$/.test(text)) return { kind: 'ambiguous' };
+  if (/^(?:option|choice|slot)\b/.test(text)) return { kind: 'ambiguous' };
+  return { kind: 'none' };
+}
+
+/**
+ * Classify a customer reply against the stored offer. Selection intent is
+ * established first; only genuine selection attempts are checked against
+ * consumption and expiry, so ordinary questions keep normal AI conversation.
  */
 export function classifyOfferReply(
   input: unknown,
@@ -95,14 +129,12 @@ export function classifyOfferReply(
   now: Date,
 ): { kind: 'accept'; index: number } | { kind: 'expired' | 'consumed' | 'ambiguous' | 'none' } {
   if (!offer) return { kind: 'none' };
+  const intent = detectSelectionIntent(input, offer);
+  if (intent.kind === 'none') return { kind: 'none' };
+  if (intent.kind === 'ambiguous') return { kind: 'ambiguous' };
   if (offerConsumed(offer)) return { kind: 'consumed' };
   if (slotOfferExpired(offer, now)) return { kind: 'expired' };
-  const index = parseSlotSelection(input, offer);
-  if (index) return { kind: 'accept', index };
-  if (typeof input === 'string' && /^(1|2|3|option|choice|slot|first|second|third)/i.test(input.trim())) {
-    return { kind: 'ambiguous' };
-  }
-  return { kind: 'none' };
+  return { kind: 'accept', index: intent.index };
 }
 
 /** Numbered choices come from stored metadata, never from reparsing conversation text. */
