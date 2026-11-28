@@ -131,14 +131,14 @@ export const POST = guard(async (req: NextRequest, { params }: { params: { id: s
           await recordRun(businessId, '', 'Escalation on low confidence', 'message.low_confidence', conv.lead_id, [{ draft: reply.body }], 'ok', '');
         } else {
           const wantsBooking = /book|slot|time|date|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday/i.test(parsed.data.body);
-          let replyBody = reply.body;
+          const requested = wantsBooking ? await offerSlots(businessId, lead, reply.body) : null;
+          const replyBody = requested?.body ?? reply.body;
           if (wantsBooking) {
-            replyBody = await offerSlots(businessId, lead, reply.body);
             await run(`UPDATE leads SET status='Qualified' WHERE id=?`, conv.lead_id);
             await recordRun(businessId, '', 'Booking + reminders + review', 'lead.qualified', conv.lead_id, [{ offered: 'real slots' }], 'ok', '');
           }
           await run(`INSERT INTO messages (id, business_id, conversation_id, sender, body, meta_json) VALUES (?, ?, ?, 'ai', ?, ?)`,
-            uid('m'), businessId, conv.id, replyBody, wantsBooking ? (await latestSlotOffer(conv.id))?.raw ?? '{}' : '{}');
+            uid('m'), businessId, conv.id, replyBody, requested?.meta ?? '{}');
         }
         await run(`UPDATE conversations SET updated_at=? WHERE id=?`, nowIso(), conv.id);
       } catch (e) {
